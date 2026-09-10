@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="DTNTB.API/DTNTB.API.csproj" />
+  <Project Path="DTNTB.Core/DTNTB.Core.csproj" />
+  <Project Path="DTNTB.Infrastructure/DTNTB.Infrastructure.csproj" />
+</Solution>
