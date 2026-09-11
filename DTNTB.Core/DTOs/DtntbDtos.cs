@@ -35,31 +35,39 @@ namespace DTNTB.Core.DTOs
         public double TgscTb { get; set; }
         public double DiemTgsc { get; set; }
 
-        // Trạng thái đã lưu gần đây nhất
-        public bool DaThayThietBi { get; set; }
-        public bool DaSuaSuyHao { get; set; }
-        public bool DaTuVanCuoc { get; set; }
-        public bool DaTuVanCombo { get; set; }
-        public string GhiChu { get; set; } = string.Empty;
-
-        // Các thuộc tính lịch sử tác nghiệp dùng cho danh sách (Default)
+        // ─── 4 THUỘC TÍNH LỊCH SỬ DÙNG CHO DANH SÁCH BẢNG NGOÀI (BỊ THIẾU) ───
         public int DiemGocLs { get; set; }
         public int DiemSauLs { get; set; }
         public string NgayTaoLs { get; set; } = "-";
         public bool DaTacNghiep { get; set; }
 
-        // Các thuộc tính nâng cấp kế hoạch & SLA
+        // Các trường can thiệp thực địa mới
+        public bool DaThayThietBi { get; set; }
+        public bool DaThietBiTot { get; set; }
+        public bool DaSuaSuyHao { get; set; }
+        public bool DaTuVanCuoc6T { get; set; }
+        public bool DaTuVanCuoc12T { get; set; }
+        public bool DaTrichNoTuDong { get; set; }
+        public bool DaTuVanMyTV { get; set; }
+        public bool DaTuVanMesh { get; set; }
+        public bool DaTuVanCam { get; set; }
+        public string GhiChu { get; set; } = string.Empty;
+
+        // Dữ liệu gốc phục vụ tính điểm giả lập
+        public bool CoMyTV { get; set; }
+        public bool CoMeshCam { get; set; }
+        public double SoThangConLai { get; set; }
+
         public string NgayGiao { get; set; } = string.Empty;
         public int TrangThaiPhieu { get; set; }
         public string NgaySd { get; set; } = string.Empty;
         public string NgayKtdc { get; set; } = string.Empty;
-        public double SoThangConLai { get; set; }
         public string LoaiOnt { get; set; } = string.Empty;
         public bool IsSlaExpired { get; set; }
         public List<string> AnhCskhUrls { get; set; } = new();
         public List<LichSuTacNghiepDto> LichSu { get; set; } = new();
 
-        // Thuộc tính thiết bị phụ trợ
+        // Thiết bị phụ trợ
         public bool DaDungCamVnpt { get; set; }
         public int SlCamVnpt { get; set; }
         public bool DaDungCamOther { get; set; }
@@ -78,7 +86,14 @@ namespace DTNTB.Core.DTOs
         public string NguoiXuly { get; set; } = string.Empty;
         public string TenNv { get; set; } = string.Empty;
         public short DaThayThietBi { get; set; }
+        public short DaThietBiTot { get; set; }
         public short DaSuaSuyHao { get; set; }
+        public short DaTuVanCuoc6T { get; set; }
+        public short DaTuVanCuoc12T { get; set; }
+        public short DaTrichNoTuDong { get; set; }
+        public short DaTuVanMyTV { get; set; }
+        public short DaTuVanMesh { get; set; }
+        public short DaTuVanCam { get; set; }
         public short DaTuVanCuoc { get; set; }
         public short DaTuVanCombo { get; set; }
         public string GhiChu { get; set; } = string.Empty;
@@ -90,9 +105,14 @@ namespace DTNTB.Core.DTOs
     {
         public long PhieuId { get; set; }
         public bool DaThayThietBi { get; set; }
+        public bool DaThietBiTot { get; set; }
         public bool DaSuaSuyHao { get; set; }
-        public bool DaTuVanCuoc { get; set; }
-        public bool DaTuVanCombo { get; set; }
+        public bool DaTuVanCuoc6T { get; set; }
+        public bool DaTuVanCuoc12T { get; set; }
+        public bool DaTrichNoTuDong { get; set; }
+        public bool DaTuVanMyTV { get; set; }
+        public bool DaTuVanMesh { get; set; }
+        public bool DaTuVanCam { get; set; }
         public string? GhiChu { get; set; }
         public bool IsUnresolved { get; set; }
         public List<IFormFile>? fuAnhCSKH { get; set; }

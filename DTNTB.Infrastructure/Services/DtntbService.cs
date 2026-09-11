@@ -213,30 +213,51 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
+        // Thay thế 3 hàm GetDetailAsync, GetLichSuTacNghiepAsync và SaveTacNghiepUpgradeAsync trong DtntbService.cs:
+
+        // ─── HÀM HỖ TRỢ TÍNH ĐIỂM CƯỚC THEO THANG THÁNG ───
+        public static int TinhDiemCuoc(double soThang, bool isTrichNo)
+        {
+            if (soThang >= 10.0) return 0;
+            if (soThang >= 9.0) return 1;
+            if (soThang >= 8.0) return 2;
+            if (soThang >= 7.0) return 3;
+            if (soThang >= 6.0) return 4;
+            if (soThang >= 5.0) return 5;
+            if (soThang >= 4.0) return 6;
+            if (soThang >= 3.0) return 7;
+            if (soThang >= 2.0) return 8;
+            if (soThang >= 1.0) return 9;
+            return isTrichNo ? 5 : 10;
+        }
+
         public async Task<DtntbDetailDto?> GetDetailAsync(long phieuId)
         {
             using (var conn = new OracleConnection(_connString))
             {
                 string query = @"
-                    SELECT t.ma_tb, t.ten_tb, t.so_dt, t.diachi_tb, t.diem_tin_nhiem, t.ma_dv, t.ma_nvkt,
-                           t.tgsd, t.diem_tgsd, t.ngay_sd,
-                           t.co_mytv, t.co_mesh, t.co_cam, t.diem_dadv,
-                           t.so_thang_tt, t.diem_tttt, t.ngay_ktdc,
-                           t.tuoi_ont, t.diem_tbi, t.loai_ont, t.ten_vt,
-                           t.sl_suyhao, t.diem_suyhao,
-                           t.sl_offlos, t.diem_offlos,
-                           t.solan_bh_1t, t.diem_bhll,
-                           t.diem_kohl,
-                           t.tgsc_tb, t.diem_tgsc,
-                           t.thuebao_id as ThueBaoId, t.phanvung_id as PhanVungId, t.phieu_id, t.ngay_giao, t.trangthai_phieu,
-                           ROUND((SYSDATE - t.ngay_giao) * 24, 2) as hours_elapsed,
-                           xl.da_thay_thietbi as DaThayThietBi, xl.da_sua_suyhao as DaSuaSuyHao, 
-                           xl.da_tuvan_cuoc as DaTuVanCuoc, xl.da_tuvan_combo as DaTuVanCombo, xl.ghi_chu as GhiChu, xl.anh_cskh as AnhCskh,
-                           xl.da_dung_cam_vnpt, xl.sl_cam_vnpt, xl.da_dung_cam_other, xl.sl_cam_other,
-                           xl.da_dung_toto_vnpt, xl.sl_toto_vnpt, xl.da_dung_toto_other, xl.sl_toto_other
-                    FROM brcd_dhgh_kehoach t
-                    LEFT JOIN brcd_dhgh_xuly xl ON t.phieu_id = xl.phieu_id
-                    WHERE t.phieu_id = :phieu_id";
+            SELECT t.ma_tb, t.ten_tb, t.so_dt, t.diachi_tb, t.diem_tin_nhiem, t.ma_dv, t.ma_nvkt,
+                   t.tgsd, t.diem_tgsd, t.ngay_sd,
+                   t.co_mytv, t.co_mesh, t.co_cam, t.diem_dadv,
+                   t.so_thang_tt, t.diem_tttt, t.ngay_ktdc,
+                   t.tuoi_ont, t.diem_tbi, t.loai_ont, t.ten_vt,
+                   t.sl_suyhao, t.diem_suyhao,
+                   t.sl_offlos, t.diem_offlos,
+                   t.solan_bh_1t, t.diem_bhll,
+                   t.diem_kohl,
+                   t.tgsc_tb, t.diem_tgsc,
+                   t.thuebao_id as ThueBaoId, t.phanvung_id as PhanVungId, t.phieu_id, t.ngay_giao, t.trangthai_phieu,
+                   ROUND((SYSDATE - t.ngay_giao) * 24, 2) as hours_elapsed,
+                   xl.da_thay_thietbi, xl.da_thietbi_tot, xl.da_sua_suyhao, 
+                   xl.da_tuvan_cuoc_6t, xl.da_tuvan_cuoc_12t, xl.da_trichno_tudong, 
+                   xl.da_tuvan_mytv, xl.da_tuvan_mesh, xl.da_tuvan_cam,
+                   xl.da_tuvan_cuoc, xl.da_tuvan_combo,
+                   xl.ghi_chu, xl.anh_cskh,
+                   xl.da_dung_cam_vnpt, xl.sl_cam_vnpt, xl.da_dung_cam_other, xl.sl_cam_other,
+                   xl.da_dung_toto_vnpt, xl.sl_toto_vnpt, xl.da_dung_toto_other, xl.sl_toto_other
+            FROM brcd_dhgh_kehoach t
+            LEFT JOIN brcd_dhgh_xuly xl ON t.phieu_id = xl.phieu_id
+            WHERE t.phieu_id = :phieu_id";
 
                 var result = await conn.QueryFirstOrDefaultAsync<dynamic>(query, new { phieu_id = phieuId });
                 if (result == null) return null;
@@ -250,8 +271,9 @@ namespace DTNTB.Infrastructure.Services
                 if (_currentUser.ScopeLevel == UserDataScopeLevel.ToQuanLy && subMaDV11 != _currentUser.MaDv11) return null;
                 if (_currentUser.ScopeLevel == UserDataScopeLevel.NhanVien && !string.Equals(recordNvkt, _currentUser.MaNv, StringComparison.OrdinalIgnoreCase)) return null;
 
+                // SLA 72 GIỜ
                 double hoursElapsed = result.HOURS_ELAPSED != null ? Convert.ToDouble(result.HOURS_ELAPSED) : 0;
-                bool isSlaExpired = hoursElapsed > 24;
+                bool isSlaExpired = hoursElapsed > 72;
 
                 double soThangConLai = 0;
                 if (result.NGAY_KTDC != null)
@@ -265,19 +287,28 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 List<string> listImages = new List<string>();
-                string rawImgString = result.ANHCSKH?.ToString() ?? "";
+                string rawImgString = result.ANH_CSKH?.ToString() ?? "";
                 if (!string.IsNullOrEmpty(rawImgString))
                 {
                     listImages = rawImgString.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
                 }
 
-                string coMytv = result.CO_MYTV?.ToString();
-                string coMesh = result.CO_MESH?.ToString();
-                string coCam = result.CO_CAM?.ToString();
+                bool hasOrigMyTV = result.CO_MYTV?.ToString() == "1";
+                bool hasOrigMeshCam = (result.CO_MESH?.ToString() == "1") || (result.CO_CAM?.ToString() == "1");
+
                 string dichVu = "Internet đơn lẻ";
-                if (coMytv == "1" && (coMesh == "1" || coCam == "1")) dichVu = "Internet + MyTV + Mesh/Cam";
-                else if (coMesh == "1" || coCam == "1") dichVu = "Internet + MyTV + Mesh/Cam";
-                else if (coMytv == "1") dichVu = "Internet + MyTV";
+                if (hasOrigMyTV && hasOrigMeshCam) dichVu = "Internet + MyTV + Mesh/Cam";
+                else if (hasOrigMeshCam) dichVu = "Internet + Mesh/Cam";
+                else if (hasOrigMyTV) dichVu = "Internet + MyTV";
+
+                bool c6t = result.DA_TUVAN_CUOC_6T?.ToString() == "1";
+                bool c12t = result.DA_TUVAN_CUOC_12T?.ToString() == "1";
+                if (!c6t && !c12t && result.DA_TUVAN_CUOC?.ToString() == "1") c6t = true;
+
+                bool pMyTv = result.DA_TUVAN_MYTV?.ToString() == "1";
+                bool pMesh = result.DA_TUVAN_MESH?.ToString() == "1";
+                bool pCam = result.DA_TUVAN_CAM?.ToString() == "1";
+                if (!pMyTv && !pMesh && !pCam && result.DA_TUVAN_COMBO?.ToString() == "1") pMyTv = true;
 
                 var detail = new DtntbDetailDto
                 {
@@ -290,6 +321,7 @@ namespace DTNTB.Infrastructure.Services
                     DiaChiTB = result.DIACHI_TB?.ToString() ?? "",
                     DiemTinNhiem = Convert.ToInt32(result.DIEM_TIN_NHIEM),
                     MaDv = result.MA_DV?.ToString() ?? "",
+                    TenNvkt = result.MA_NVKT?.ToString() ?? "",
                     Tgsd = result.TGSD != null ? Convert.ToDouble(result.TGSD) : 0,
                     DiemTgsd = result.DIEM_TGSD != null ? Convert.ToInt32(result.DIEM_TGSD) : 0,
                     DiemDadv = result.DIEM_DADV != null ? Convert.ToInt32(result.DIEM_DADV) : 0,
@@ -307,17 +339,26 @@ namespace DTNTB.Infrastructure.Services
                     DiemKohl = result.DIEM_KOHL != null ? Convert.ToInt32(result.DIEM_KOHL) : 0,
                     TgscTb = result.TGSC_TB != null ? Convert.ToDouble(result.TGSC_TB) : 0,
                     DiemTgsc = result.DIEM_TGSC != null ? Convert.ToDouble(result.DIEM_TGSC) : 0,
-                    DaThayThietBi = result.DATHAYTHIETBI?.ToString() == "1",
-                    DaSuaSuyHao = result.DASUASUYHAO?.ToString() == "1",
-                    DaTuVanCuoc = result.DATUVANCUOC?.ToString() == "1",
-                    DaTuVanCombo = result.DATUVANCOMBO?.ToString() == "1",
-                    GhiChu = result.GHICHU?.ToString() ?? "",
+
+                    DaThayThietBi = result.DA_THAY_THIETBI?.ToString() == "1",
+                    DaThietBiTot = result.DA_THIETBI_TOT?.ToString() == "1",
+                    DaSuaSuyHao = result.DA_SUA_SUYHAO?.ToString() == "1",
+                    DaTuVanCuoc6T = c6t,
+                    DaTuVanCuoc12T = c12t,
+                    DaTrichNoTuDong = result.DA_TRICHNO_TUDONG?.ToString() == "1",
+                    DaTuVanMyTV = pMyTv,
+                    DaTuVanMesh = pMesh,
+                    DaTuVanCam = pCam,
+                    GhiChu = result.GHI_CHU?.ToString() ?? "",
+
+                    CoMyTV = hasOrigMyTV,
+                    CoMeshCam = hasOrigMeshCam,
+                    SoThangConLai = soThangConLai,
 
                     NgayGiao = result.NGAY_GIAO != null ? Convert.ToDateTime(result.NGAY_GIAO).ToString("dd/MM/yyyy HH:mm") : "",
                     TrangThaiPhieu = Convert.ToInt32(result.TRANGTHAI_PHIEU),
                     NgaySd = result.NGAY_SD != null ? Convert.ToDateTime(result.NGAY_SD).ToString("dd/MM/yyyy") : "Chưa có",
                     NgayKtdc = result.NGAY_KTDC != null ? Convert.ToDateTime(result.NGAY_KTDC).ToString("dd/MM/yyyy") : "Chưa có",
-                    SoThangConLai = soThangConLai,
                     LoaiOnt = result.TEN_VT?.ToString() ?? "-",
                     IsSlaExpired = isSlaExpired,
                     AnhCskhUrls = listImages,
@@ -345,31 +386,38 @@ namespace DTNTB.Infrastructure.Services
             using (var conn = new OracleConnection(_connString))
             {
                 string query = @"
-                    SELECT xl.phieu_id as PhieuId, t.ngay_giao as NgayGiao, xl.ngay_tao as NgayTao, 
-                           xl.nguoi_xuly as NguoiXuly, xl.ten_nv as TenNv, xl.ghi_chu as GhiChu, 
-                           xl.diem_goc as DiemGoc, xl.diem_sau_xl as DiemSauXl,
-                           xl.da_thay_thietbi as DaThayThietBi, xl.da_sua_suyhao as DaSuaSuyHao, 
-                           xl.da_tuvan_cuoc as DaTuVanCuoc, xl.da_tuvan_combo as DaTuVanCombo
-                    FROM brcd_dhgh_xuly xl
-                    LEFT JOIN brcd_dhgh_kehoach t ON xl.phieu_id = t.phieu_id
-                    WHERE xl.thuebao_id = :thuebao_id AND xl.phanvung_id = :phanvung_id
-                    ORDER BY xl.ngay_tao DESC, xl.xuly_id DESC";
+            SELECT xl.phieu_id, t.ngay_giao, xl.ngay_tao, xl.nguoi_xuly, xl.ten_nv, xl.ghi_chu, xl.diem_goc, xl.diem_sau_xl,
+                   xl.da_thay_thietbi, xl.da_thietbi_tot, xl.da_sua_suyhao, 
+                   xl.da_tuvan_cuoc_6t, xl.da_tuvan_cuoc_12t, xl.da_trichno_tudong, 
+                   xl.da_tuvan_mytv, xl.da_tuvan_mesh, xl.da_tuvan_cam,
+                   xl.da_tuvan_cuoc, xl.da_tuvan_combo
+            FROM brcd_dhgh_xuly xl
+            LEFT JOIN brcd_dhgh_kehoach t ON xl.phieu_id = t.phieu_id
+            WHERE xl.thuebao_id = :thuebao_id AND xl.phanvung_id = :phanvung_id
+            ORDER BY xl.ngay_tao DESC, xl.xuly_id DESC";
 
                 var list = await conn.QueryAsync<dynamic>(query, new { thuebao_id = Convert.ToInt64(thuebaoId), phanvung_id = Convert.ToInt32(phanvungId) });
                 return list.Select(r => new LichSuTacNghiepDto
                 {
-                    PhieuId = r.PHIEUID != null ? Convert.ToInt64(r.PHIEUID) : null,
-                    NgayGiao = r.NGAYGIAO != null ? Convert.ToDateTime(r.NGAYGIAO).ToString("dd/MM/yyyy HH:mm") : "-",
-                    NgayTao = Convert.ToDateTime(r.NGAYTAO).ToString("dd/MM/yyyy HH:mm"),
-                    NguoiXuly = r.NGUOIXULY?.ToString() ?? "",
-                    TenNv = r.TENNV?.ToString() ?? "",
-                    DaThayThietBi = Convert.ToInt16(r.DATHAYTHIETBI),
-                    DaSuaSuyHao = Convert.ToInt16(r.DASUASUYHAO),
-                    DaTuVanCuoc = Convert.ToInt16(r.DATUVANCUOC),
-                    DaTuVanCombo = Convert.ToInt16(r.DATUVANCOMBO),
-                    GhiChu = r.GHICHU?.ToString() ?? "",
-                    DiemGoc = Convert.ToInt32(r.DIEMGOC),
-                    DiemSauXl = Convert.ToInt32(r.DIEMSAUXL)
+                    PhieuId = r.PHIEU_ID != null ? Convert.ToInt64(r.PHIEU_ID) : null,
+                    NgayGiao = r.NGAY_GIAO != null ? Convert.ToDateTime(r.NGAY_GIAO).ToString("dd/MM/yyyy HH:mm") : "-",
+                    NgayTao = Convert.ToDateTime(r.NGAY_TAO).ToString("dd/MM/yyyy HH:mm"),
+                    NguoiXuly = r.NGUOI_XULY?.ToString() ?? "",
+                    TenNv = r.TEN_NV?.ToString() ?? "",
+                    DaThayThietBi = Convert.ToInt16(r.DA_THAY_THIETBI),
+                    DaThietBiTot = Convert.ToInt16(r.DA_THIETBI_TOT),
+                    DaSuaSuyHao = Convert.ToInt16(r.DA_SUA_SUYHAO),
+                    DaTuVanCuoc6T = Convert.ToInt16(r.DA_TUVAN_CUOC_6T),
+                    DaTuVanCuoc12T = Convert.ToInt16(r.DA_TUVAN_CUOC_12T),
+                    DaTrichNoTuDong = Convert.ToInt16(r.DA_TRICHNO_TUDONG),
+                    DaTuVanMyTV = Convert.ToInt16(r.DA_TUVAN_MYTV),
+                    DaTuVanMesh = Convert.ToInt16(r.DA_TUVAN_MESH),
+                    DaTuVanCam = Convert.ToInt16(r.DA_TUVAN_CAM),
+                    DaTuVanCuoc = Convert.ToInt16(r.DA_TUVAN_CUOC),
+                    DaTuVanCombo = Convert.ToInt16(r.DA_TUVAN_COMBO),
+                    GhiChu = r.GHI_CHU?.ToString() ?? "",
+                    DiemGoc = Convert.ToInt32(r.DIEM_GOC),
+                    DiemSauXl = Convert.ToInt32(r.DIEM_SAU_XL)
                 }).ToList();
             }
         }
@@ -379,6 +427,7 @@ namespace DTNTB.Infrastructure.Services
             string maNv = _currentUser.MaNv ?? "";
             string tenNv = _currentUser.TenNv ?? "";
 
+            // 1. KIỂM TRA SLA 72 GIỜ VÀ QUYỀN TRÊN BẢN GHI
             using (var connSla = new OracleConnection(_connString))
             {
                 string slaQuery = "SELECT ROUND((SYSDATE - ngay_giao) * 24, 2) as hours_elapsed, ma_dv, ma_nvkt FROM brcd_dhgh_kehoach WHERE phieu_id = :phieu_id";
@@ -386,7 +435,7 @@ namespace DTNTB.Infrastructure.Services
                 if (target == null) return false;
 
                 double hoursElapsed = Convert.ToDouble(target.HOURS_ELAPSED);
-                if (hoursElapsed > 24) return false;
+                if (hoursElapsed > 72) return false; // QUÁ HẠN 72 GIỜ CHẶN LƯU
 
                 string recordDv7 = (target.MA_DV?.ToString() ?? "").Length > 7 ? target.MA_DV.ToString().Substring(0, 7) : target.MA_DV?.ToString();
                 string recordDv11 = (target.MA_DV?.ToString() ?? "").Length > 11 ? target.MA_DV.ToString().Substring(0, 11) : target.MA_DV?.ToString();
@@ -396,7 +445,10 @@ namespace DTNTB.Infrastructure.Services
                 if (_currentUser.ScopeLevel == UserDataScopeLevel.DonVi && recordDv7 != _currentUser.MaDv7) return false;
             }
 
-            if (!model.IsUnresolved && !model.DaThayThietBi && !model.DaSuaSuyHao && !model.DaTuVanCuoc && !model.DaTuVanCombo)
+            // 2. LỚP KIỂM TRA (VALIDATION)
+            if (!model.IsUnresolved && !model.DaThayThietBi && !model.DaThietBiTot && !model.DaSuaSuyHao &&
+                !model.DaTuVanCuoc6T && !model.DaTuVanCuoc12T && !model.DaTrichNoTuDong &&
+                !model.DaTuVanMyTV && !model.DaTuVanMesh && !model.DaTuVanCam)
             {
                 return false;
             }
@@ -406,6 +458,7 @@ namespace DTNTB.Infrastructure.Services
                 return false;
             }
 
+            // 3. XỬ LÝ LƯU ẢNH
             string relativeFilePaths = "";
             if (model.fuAnhCSKH != null && model.fuAnhCSKH.Count > 0)
             {
@@ -440,7 +493,7 @@ namespace DTNTB.Infrastructure.Services
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine("Lỗi lưu ảnh: " + ex.Message);
+                    System.Diagnostics.Debug.WriteLine("Lỗi upload: " + ex.Message);
                     return false;
                 }
             }
@@ -461,6 +514,12 @@ namespace DTNTB.Infrastructure.Services
                 }
             }
 
+            // BẮT BUỘC CÓ ẢNH NẾU CHỌN "THIẾT BỊ TỐT"
+            if (model.DaThietBiTot && string.IsNullOrEmpty(relativeFilePaths))
+            {
+                return false;
+            }
+
             short dCamVnpt = (short)(model.DaDungCamVnpt ? 1 : 0);
             int qCamVnpt = dCamVnpt == 1 ? model.SlCamVnpt : 0;
             short dCamOther = (short)(model.DaDungCamOther ? 1 : 0);
@@ -479,10 +538,11 @@ namespace DTNTB.Infrastructure.Services
                     try
                     {
                         string selectSql = @"
-                            SELECT thuebao_id, phanvung_id, diem_tin_nhiem, ma_dv, ten_dv, 
-                                   diem_tbi, diem_suyhao, diem_tttt, diem_dadv 
-                            FROM brcd_dhgh_kehoach 
-                            WHERE phieu_id = :phieu_id";
+                    SELECT thuebao_id, phanvung_id, diem_tin_nhiem, ma_dv, ten_dv, 
+                           diem_tbi, diem_suyhao, diem_tttt, diem_dadv,
+                           ngay_ktdc, co_mytv, co_mesh, co_cam
+                    FROM brcd_dhgh_kehoach 
+                    WHERE phieu_id = :phieu_id";
 
                         var kh = await conn.QueryFirstOrDefaultAsync<dynamic>(selectSql, new { phieu_id = model.PhieuId }, trans);
                         if (kh == null) return false;
@@ -498,17 +558,74 @@ namespace DTNTB.Infrastructure.Services
                         int pTttt = kh.DIEM_TTTT != null ? Convert.ToInt32(kh.DIEM_TTTT) : 0;
                         int pDadv = kh.DIEM_DADV != null ? Convert.ToInt32(kh.DIEM_DADV) : 0;
 
+                        double soThangConLai = 0;
+                        if (kh.NGAY_KTDC != null)
+                        {
+                            DateTime ngayKtdc = Convert.ToDateTime(kh.NGAY_KTDC);
+                            if (ngayKtdc > DateTime.Today)
+                            {
+                                soThangConLai = Math.Round((ngayKtdc - DateTime.Today).TotalDays / 30.0, 1);
+                            }
+                        }
+
+                        bool hasOrigMyTV = kh.CO_MYTV?.ToString() == "1";
+                        bool hasOrigMeshCam = (kh.CO_MESH?.ToString() == "1") || (kh.CO_CAM?.ToString() == "1");
+
                         short thayTbi = (short)(model.IsUnresolved ? 0 : (model.DaThayThietBi ? 1 : 0));
+                        short tbiTot = (short)(model.IsUnresolved ? 0 : (model.DaThietBiTot ? 1 : 0));
                         short suaSuyHao = (short)(model.IsUnresolved ? 0 : (model.DaSuaSuyHao ? 1 : 0));
-                        short tuVanCuoc = (short)(model.IsUnresolved ? 0 : (model.DaTuVanCuoc ? 1 : 0));
-                        short tuVanCombo = (short)(model.IsUnresolved ? 0 : (model.DaTuVanCombo ? 1 : 0));
 
-                        int minusTbi = (thayTbi == 1) ? pTbi : 0;
-                        int minusSuyhao = (suaSuyHao == 1) ? pSuyhao : 0;
-                        int minusTttt = (tuVanCuoc == 1) ? pTttt : 0;
-                        int minusDadv = (tuVanCombo == 1) ? pDadv : 0;
+                        short cuoc6T = (short)(model.IsUnresolved ? 0 : (model.DaTuVanCuoc6T ? 1 : 0));
+                        short cuoc12T = (short)(model.IsUnresolved ? 0 : (model.DaTuVanCuoc12T ? 1 : 0));
+                        short trichNo = (short)(model.IsUnresolved ? 0 : (model.DaTrichNoTuDong ? 1 : 0));
+                        short tuVanCuoc = (short)(cuoc6T == 1 || cuoc12T == 1 ? 1 : 0);
 
-                        int computedDiemSauXl = diemGoc - minusTbi - minusSuyhao - minusTttt - minusDadv;
+                        short pMyTv = (short)(model.IsUnresolved ? 0 : (model.DaTuVanMyTV ? 1 : 0));
+                        short pMesh = (short)(model.IsUnresolved ? 0 : (model.DaTuVanMesh ? 1 : 0));
+                        short pCam = (short)(model.IsUnresolved ? 0 : (model.DaTuVanCam ? 1 : 0));
+                        short tuVanCombo = (short)(pMyTv == 1 || pMesh == 1 || pCam == 1 ? 1 : 0);
+
+                        int computedDiemSauXl = diemGoc;
+                        if (!model.IsUnresolved)
+                        {
+                            // 1. Giảm điểm Thiết bị
+                            int minusTbi = 0;
+                            if (thayTbi == 1) minusTbi = pTbi;
+                            else if (tbiTot == 1) minusTbi = (pTbi > 5) ? (pTbi - 5) : 0;
+
+                            // 2. Giảm điểm Suy hao
+                            int minusSuyhao = (suaSuyHao == 1) ? pSuyhao : 0;
+
+                            // 3. Giảm điểm Cước
+                            double soThangMoi = soThangConLai;
+                            if (cuoc6T == 1) soThangMoi += 6.0;
+                            else if (cuoc12T == 1) soThangMoi += 12.0;
+
+                            int newTtttScore;
+                            if (cuoc6T == 1 || cuoc12T == 1) newTtttScore = TinhDiemCuoc(soThangMoi, false);
+                            else if (trichNo == 1) newTtttScore = Math.Min(pTttt, 5);
+                            else newTtttScore = pTttt;
+
+                            int minusTttt = pTttt - newTtttScore;
+                            if (minusTttt < 0) minusTttt = 0;
+
+                            // 4. Giảm điểm Combo
+                            bool hasNewMyTV = hasOrigMyTV || (pMyTv == 1);
+                            bool hasNewMeshCam = hasOrigMeshCam || (pMesh == 1 || pCam == 1);
+
+                            int newDadvScore;
+                            if (hasNewMyTV && hasNewMeshCam) newDadvScore = 0;
+                            else if (hasNewMeshCam) newDadvScore = 2;
+                            else if (hasNewMyTV) newDadvScore = 3;
+                            else newDadvScore = 5;
+
+                            if (newDadvScore > pDadv) newDadvScore = pDadv;
+                            int minusDadv = pDadv - newDadvScore;
+                            if (minusDadv < 0) minusDadv = 0;
+
+                            computedDiemSauXl = diemGoc - minusTbi - minusSuyhao - minusTttt - minusDadv;
+                            if (computedDiemSauXl < 0) computedDiemSauXl = 0;
+                        }
 
                         string ghiChu = (model.GhiChu ?? "").Trim();
                         if (model.IsUnresolved && !ghiChu.StartsWith("[Chưa xử lý được]"))
@@ -517,66 +634,89 @@ namespace DTNTB.Infrastructure.Services
                         }
 
                         string mergeQuery = @"
-                            MERGE INTO brcd_dhgh_xuly target
-                            USING (
-                                SELECT :phieu_id as phieu_id, :thuebao_id as thuebao_id, :phanvung_id as phanvung_id,
-                                       :da_thay_thietbi as da_thay_thietbi, :da_sua_suyhao as da_sua_suyhao, 
-                                       :da_tuvan_cuoc as da_tuvan_cuoc, :da_tuvan_combo as da_tuvan_combo,
-                                       :diem_goc as diem_goc, :diem_sau_xl as diem_sau_xl, :ghi_chu as ghi_chu,
-                                       :nguoi_xuly as nguoi_xuly, :ten_nv as ten_nv, :ma_dv as ma_dv, :ten_dv as ten_dv, :anh_cskh as anh_cskh,
-                                       :da_dung_cam_vnpt as da_dung_cam_vnpt, :sl_cam_vnpt as sl_cam_vnpt,
-                                       :da_dung_cam_other as da_dung_cam_other, :sl_cam_other as sl_cam_other,
-                                       :da_dung_toto_vnpt as da_dung_toto_vnpt, :sl_toto_vnpt as sl_toto_vnpt,
-                                       :da_dung_toto_other as da_dung_toto_other, :sl_toto_other as sl_toto_other
-                                FROM dual
-                            ) source
-                            ON (target.phieu_id = source.phieu_id)
-                            WHEN MATCHED THEN
-                                UPDATE SET 
-                                    target.da_thay_thietbi = source.da_thay_thietbi,
-                                    target.da_sua_suyhao = source.da_sua_suyhao,
-                                    target.da_tuvan_cuoc = source.da_tuvan_cuoc,
-                                    target.da_tuvan_combo = source.da_tuvan_combo,
-                                    target.diem_goc = source.diem_goc,
-                                    target.diem_sau_xl = source.diem_sau_xl,
-                                    target.ghi_chu = source.ghi_chu,
-                                    target.nguoi_xuly = source.nguoi_xuly,
-                                    target.ten_nv = source.ten_nv,
-                                    target.anh_cskh = source.anh_cskh,
-                                    target.da_dung_cam_vnpt = source.da_dung_cam_vnpt,
-                                    target.sl_cam_vnpt = source.sl_cam_vnpt,
-                                    target.da_dung_cam_other = source.da_dung_cam_other,
-                                    target.sl_cam_other = source.sl_cam_other,
-                                    target.da_dung_toto_vnpt = source.da_dung_toto_vnpt,
-                                    target.sl_toto_vnpt = source.sl_toto_vnpt,
-                                    target.da_dung_toto_other = source.da_dung_toto_other,
-                                    target.sl_toto_other = source.sl_toto_other,
-                                    target.ngay_tao = SYSDATE
-                            WHEN NOT MATCHED THEN
-                                INSERT (
-                                    phieu_id, thuebao_id, phanvung_id, da_thay_thietbi, da_sua_suyhao, da_tuvan_cuoc, da_tuvan_combo, 
-                                    diem_goc, diem_sau_xl, ghi_chu, nguoi_xuly, ten_nv, ma_dv, ten_dv, anh_cskh,
-                                    da_dung_cam_vnpt, sl_cam_vnpt,
-                                    da_dung_cam_other, sl_cam_other,
-                                    da_dung_toto_vnpt, sl_toto_vnpt,
-                                    da_dung_toto_other, sl_toto_other, ngay_tao
-                                ) VALUES (
-                                    source.phieu_id, source.thuebao_id, source.phanvung_id, source.da_thay_thietbi, source.da_sua_suyhao, source.da_tuvan_cuoc, source.da_tuvan_combo, 
-                                    source.diem_goc, source.diem_sau_xl, source.ghi_chu, source.nguoi_xuly, source.ten_nv, source.ma_dv, source.ten_dv, source.anh_cskh,
-                                    source.da_dung_cam_vnpt, source.sl_cam_vnpt,
-                                    source.da_dung_cam_other, source.sl_cam_other,
-                                    source.da_dung_toto_vnpt, source.sl_toto_vnpt,
-                                    source.da_dung_toto_other, source.sl_toto_other, SYSDATE
-                                )";
+                    MERGE INTO brcd_dhgh_xuly target
+                    USING (
+                        SELECT :phieu_id as phieu_id, :thuebao_id as thuebao_id, :phanvung_id as phanvung_id,
+                               :da_thay_thietbi as da_thay_thietbi, :da_thietbi_tot as da_thietbi_tot,
+                               :da_sua_suyhao as da_sua_suyhao, 
+                               :da_tuvan_cuoc as da_tuvan_cuoc,
+                               :da_tuvan_cuoc_6t as da_tuvan_cuoc_6t, :da_tuvan_cuoc_12t as da_tuvan_cuoc_12t,
+                               :da_trichno_tudong as da_trichno_tudong,
+                               :da_tuvan_combo as da_tuvan_combo,
+                               :da_tuvan_mytv as da_tuvan_mytv, :da_tuvan_mesh as da_tuvan_mesh, :da_tuvan_cam as da_tuvan_cam,
+                               :diem_goc as diem_goc, :diem_sau_xl as diem_sau_xl, :ghi_chu as ghi_chu,
+                               :nguoi_xuly as nguoi_xuly, :ten_nv as ten_nv, :ma_dv as ma_dv, :ten_dv as ten_dv, :anh_cskh as anh_cskh,
+                               :da_dung_cam_vnpt as da_dung_cam_vnpt, :sl_cam_vnpt as sl_cam_vnpt,
+                               :da_dung_cam_other as da_dung_cam_other, :sl_cam_other as sl_cam_other,
+                               :da_dung_toto_vnpt as da_dung_toto_vnpt, :sl_toto_vnpt as sl_toto_vnpt,
+                               :da_dung_toto_other as da_dung_toto_other, :sl_toto_other as sl_toto_other
+                        FROM dual
+                    ) source
+                    ON (target.phieu_id = source.phieu_id)
+                    WHEN MATCHED THEN
+                        UPDATE SET 
+                            target.da_thay_thietbi = source.da_thay_thietbi,
+                            target.da_thietbi_tot = source.da_thietbi_tot,
+                            target.da_sua_suyhao = source.da_sua_suyhao,
+                            target.da_tuvan_cuoc = source.da_tuvan_cuoc,
+                            target.da_tuvan_cuoc_6t = source.da_tuvan_cuoc_6t,
+                            target.da_tuvan_cuoc_12t = source.da_tuvan_cuoc_12t,
+                            target.da_trichno_tudong = source.da_trichno_tudong,
+                            target.da_tuvan_combo = source.da_tuvan_combo,
+                            target.da_tuvan_mytv = source.da_tuvan_mytv,
+                            target.da_tuvan_mesh = source.da_tuvan_mesh,
+                            target.da_tuvan_cam = source.da_tuvan_cam,
+                            target.diem_goc = source.diem_goc,
+                            target.diem_sau_xl = source.diem_sau_xl,
+                            target.ghi_chu = source.ghi_chu,
+                            target.nguoi_xuly = source.nguoi_xuly,
+                            target.ten_nv = source.ten_nv,
+                            target.anh_cskh = source.anh_cskh,
+                            target.da_dung_cam_vnpt = source.da_dung_cam_vnpt,
+                            target.sl_cam_vnpt = source.sl_cam_vnpt,
+                            target.da_dung_cam_other = source.da_dung_cam_other,
+                            target.sl_cam_other = source.sl_cam_other,
+                            target.da_dung_toto_vnpt = source.da_dung_toto_vnpt,
+                            target.sl_toto_vnpt = source.sl_toto_vnpt,
+                            target.da_dung_toto_other = source.da_dung_toto_other,
+                            target.sl_toto_other = source.sl_toto_other,
+                            target.ngay_tao = SYSDATE
+                    WHEN NOT MATCHED THEN
+                        INSERT (
+                            phieu_id, thuebao_id, phanvung_id, da_thay_thietbi, da_thietbi_tot, da_sua_suyhao, 
+                            da_tuvan_cuoc, da_tuvan_cuoc_6t, da_tuvan_cuoc_12t, da_trichno_tudong, 
+                            da_tuvan_combo, da_tuvan_mytv, da_tuvan_mesh, da_tuvan_cam,
+                            diem_goc, diem_sau_xl, ghi_chu, nguoi_xuly, ten_nv, ma_dv, ten_dv, anh_cskh,
+                            da_dung_cam_vnpt, sl_cam_vnpt,
+                            da_dung_cam_other, sl_cam_other,
+                            da_dung_toto_vnpt, sl_toto_vnpt,
+                            da_dung_toto_other, sl_toto_other, ngay_tao
+                        ) VALUES (
+                            source.phieu_id, source.thuebao_id, source.phanvung_id, source.da_thay_thietbi, source.da_thietbi_tot, source.da_sua_suyhao, 
+                            source.da_tuvan_cuoc, source.da_tuvan_cuoc_6t, source.da_tuvan_cuoc_12t, source.da_trichno_tudong, 
+                            source.da_tuvan_combo, source.da_tuvan_mytv, source.da_tuvan_mesh, source.da_tuvan_cam,
+                            source.diem_goc, source.diem_sau_xl, source.ghi_chu, source.nguoi_xuly, source.ten_nv, source.ma_dv, source.ten_dv, source.anh_cskh,
+                            source.da_dung_cam_vnpt, source.sl_cam_vnpt,
+                            source.da_dung_cam_other, source.sl_cam_other,
+                            source.da_dung_toto_vnpt, source.sl_toto_vnpt,
+                            source.da_dung_toto_other, source.sl_toto_other, SYSDATE
+                        )";
 
                         var mergeParams = new DynamicParameters();
                         mergeParams.Add("phieu_id", model.PhieuId, DbType.Int64);
                         mergeParams.Add("thuebao_id", thuebaoId, DbType.Int64);
                         mergeParams.Add("phanvung_id", phanvungId, DbType.Int32);
                         mergeParams.Add("da_thay_thietbi", thayTbi, DbType.Int16);
+                        mergeParams.Add("da_thietbi_tot", tbiTot, DbType.Int16);
                         mergeParams.Add("da_sua_suyhao", suaSuyHao, DbType.Int16);
                         mergeParams.Add("da_tuvan_cuoc", tuVanCuoc, DbType.Int16);
+                        mergeParams.Add("da_tuvan_cuoc_6t", cuoc6T, DbType.Int16);
+                        mergeParams.Add("da_tuvan_cuoc_12t", cuoc12T, DbType.Int16);
+                        mergeParams.Add("da_trichno_tudong", trichNo, DbType.Int16);
                         mergeParams.Add("da_tuvan_combo", tuVanCombo, DbType.Int16);
+                        mergeParams.Add("da_tuvan_mytv", pMyTv, DbType.Int16);
+                        mergeParams.Add("da_tuvan_mesh", pMesh, DbType.Int16);
+                        mergeParams.Add("da_tuvan_cam", pCam, DbType.Int16);
                         mergeParams.Add("diem_goc", diemGoc, DbType.Int32);
                         mergeParams.Add("diem_sau_xl", computedDiemSauXl, DbType.Int32);
                         mergeParams.Add("ghi_chu", ghiChu, DbType.String);
