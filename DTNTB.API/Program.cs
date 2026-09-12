@@ -9,6 +9,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.IO;
 using System.Text;
 using DTNTB.API.Security;
+using Microsoft.AspNetCore.HttpOverrides; // <-- 1. THÊM MỚI
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,19 +26,25 @@ if (System.IO.File.Exists(firebaseKeyPath))
 }
 
 // ==========================================
-// 2. ĐĂNG KÝ DEPENDENCY INJECTION (DI) & SECURITY CHUẨN MỚI
+// 2. DEPENDENCY INJECTION & FORWARDED HEADERS
 // ==========================================
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
-// Kích hoạt Dynamic Authorization Policy Provider
 builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
-// Đăng ký HttpClient kết nối SSO & Service
 builder.Services.AddHttpClient<IAuthService, AuthService>();
 builder.Services.AddScoped<IDtntbService, DtntbService>();
-builder.Services.AddScoped<IHeThongService, HeThongService>(); // <-- THÊM DÒNG NÀY
+builder.Services.AddScoped<IHeThongService, HeThongService>();
+
+// Cấu hình nhận diện Proxy trung gian
+builder.Services.Configure<ForwardedHeadersOptions>(options => // <-- 2. THÊM MỚI
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 // ==========================================
 // 3. CẤU HÌNH JWT AUTHENTICATION
@@ -62,14 +69,20 @@ builder.Services.AddAuthentication(x =>
 });
 
 // ==========================================
-// 4. CẤU HÌNH CORS
+// 4. CẤU HÌNH CORS (CHUẨN BẢO MẬT HƠN)
 // ==========================================
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngular",
-        policy => policy.WithOrigins("http://localhost:4200")
-                        .AllowAnyMethod()
-                        .AllowAnyHeader());
+    options.AddPolicy("AllowAngular", policy =>
+    {
+        policy.WithOrigins(
+                "http://localhost:4200",
+                "https://clm.vnptninhbinh.com.vn"
+              )
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials();
+    });
 });
 
 builder.Services.AddControllers();
@@ -103,27 +116,36 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+// Nhận diện IP/Domain từ Reverse Proxy (phải nằm đầu tiên)
+app.UseForwardedHeaders(); // <-- 3. ĐẶT ĐẦU TIÊN
+
+// Chỉ mở Swagger khi chạy Dev ở máy
+if (app.Environment.IsDevelopment()) // <-- 4. BỌC LẠI
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseHttpsRedirection();
-
 app.UseCors("AllowAngular");
-app.UseAuthentication();
-app.UseAuthorization();
 
-app.MapControllers();
-
+// Cấu hình Static Files đưa lên trước Authentication & Controllers
 var physRoot = builder.Configuration["MatLuoi:PhysRoot"] ?? "D:\\DataUpload\\matluoi\\";
 if (!Directory.Exists(physRoot))
 {
     Directory.CreateDirectory(physRoot);
 }
-
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(physRoot),
     RequestPath = "/uploads/matluoi"
 });
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
 
 app.Run();
