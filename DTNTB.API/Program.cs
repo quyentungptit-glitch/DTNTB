@@ -38,6 +38,12 @@ builder.Services.AddHttpClient<IAuthService, AuthService>();
 builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
 
+// Đăng ký Typed HttpClient cho FileStorageService (tối ưu socket và pooling)
+builder.Services.AddHttpClient<IFileStorageService, RemoteFileStorageService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60); // Thời gian chờ tối đa khi upload
+});
+
 // Cấu hình nhận diện Proxy trung gian
 builder.Services.Configure<ForwardedHeadersOptions>(options => // <-- 2. THÊM MỚI
 {

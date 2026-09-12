@@ -17,16 +17,17 @@ namespace DTNTB.Infrastructure.Services
     public class DtntbService : IDtntbService
     {
         private readonly string _connString;
-        private readonly string _physRoot;
-        private readonly string _urlBase;
         private readonly ICurrentUserService _currentUser;
+        private readonly IFileStorageService _fileStorageService; // <-- 1. DỊCH VỤ STORAGE NỘI BỘ
 
-        public DtntbService(IConfiguration config, ICurrentUserService currentUser)
+        public DtntbService(
+            IConfiguration config,
+            ICurrentUserService currentUser,
+            IFileStorageService fileStorageService) // <-- 2. INJECT STORAGE SERVICE
         {
             _connString = config.GetConnectionString("ConnectionString_NBH") ?? string.Empty;
-            _physRoot = config["MatLuoi:PhysRoot"] ?? "D:\\DataUpload\\matluoi\\";
-            _urlBase = config["MatLuoi:UrlBase"] ?? "https://localhost:8080/uploads/matluoi/";
             _currentUser = currentUser;
+            _fileStorageService = fileStorageService;
         }
 
         public async Task<List<DropdownItemDto>?> GetDonViAsync()
@@ -80,10 +81,9 @@ namespace DTNTB.Infrastructure.Services
 
             switch (_currentUser.ScopeLevel)
             {
-                case UserDataScopeLevel.DiaBan: // <-- XỬ LÝ CHO CẤP ĐỊA BÀN (AREA_ADMIN)
+                case UserDataScopeLevel.DiaBan:
                     if (!string.IsNullOrEmpty(_currentUser.DiaBanId))
                     {
-                        // Lọc toàn bộ các đơn vị (7 ký tự) thuộc địa bàn quản lý
                         sql += @" AND EXISTS (
                             SELECT 1 FROM v_donvi_diaban db 
                             WHERE SUBSTR(TRIM(t.ma_dv), 1, 7) = SUBSTR(TRIM(db.ma_dv), 1, 7) 
@@ -105,7 +105,7 @@ namespace DTNTB.Infrastructure.Services
                     parameters.Add("ma_dv", filterMaDV, DbType.String);
                     break;
 
-                case UserDataScopeLevel.NhanVien: // Áp dụng cho cả NVKT, NVKD, NVAM
+                case UserDataScopeLevel.NhanVien:
                     filterMaDV = _currentUser.MaDv ?? "";
                     filterMaNV = _currentUser.MaNv ?? "";
                     sql += " AND TRIM(t.ma_dv) = TRIM(:ma_dv)";
@@ -114,7 +114,7 @@ namespace DTNTB.Infrastructure.Services
                     parameters.Add("ma_nvkt", filterMaNV, DbType.String);
                     break;
 
-                default: // ToanTinh hoặc DiaBan
+                default:
                     if (!string.IsNullOrEmpty(filterMaDV) && filterMaDV != "ALL")
                     {
                         sql += " AND TRIM(t.ma_dv) LIKE :ma_dv || '%'";
@@ -136,7 +136,6 @@ namespace DTNTB.Infrastructure.Services
 
             if (!string.IsNullOrEmpty(search))
             {
-            baseSearch:
                 sql += " AND (UPPER(t.ma_tb) LIKE UPPER(:search) OR t.so_dt LIKE :search)";
                 parameters.Add("search", "%" + search.Trim() + "%", DbType.String);
             }
@@ -213,9 +212,6 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        // Thay thế 3 hàm GetDetailAsync, GetLichSuTacNghiepAsync và SaveTacNghiepUpgradeAsync trong DtntbService.cs:
-
-        // ─── HÀM HỖ TRỢ TÍNH ĐIỂM CƯỚC THEO THANG THÁNG ───
         public static int TinhDiemCuoc(double soThang, bool isTrichNo)
         {
             if (soThang >= 10.0) return 0;
@@ -290,7 +286,9 @@ namespace DTNTB.Infrastructure.Services
                 string rawImgString = result.ANH_CSKH?.ToString() ?? "";
                 if (!string.IsNullOrEmpty(rawImgString))
                 {
-                    listImages = rawImgString.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+                    listImages = rawImgString.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                             .Select(s => s.Trim().Replace('\\', '/'))
+                                             .ToList();
                 }
 
                 bool hasOrigMyTV = result.CO_MYTV?.ToString() == "1";
@@ -435,7 +433,7 @@ namespace DTNTB.Infrastructure.Services
                 if (target == null) return false;
 
                 double hoursElapsed = Convert.ToDouble(target.HOURS_ELAPSED);
-                if (hoursElapsed > 72) return false; // QUÁ HẠN 72 GIỜ CHẶN LƯU
+                if (hoursElapsed > 72) return false;
 
                 string recordDv7 = (target.MA_DV?.ToString() ?? "").Length > 7 ? target.MA_DV.ToString().Substring(0, 7) : target.MA_DV?.ToString();
                 string recordDv11 = (target.MA_DV?.ToString() ?? "").Length > 11 ? target.MA_DV.ToString().Substring(0, 11) : target.MA_DV?.ToString();
@@ -458,61 +456,58 @@ namespace DTNTB.Infrastructure.Services
                 return false;
             }
 
-            // 3. XỬ LÝ LƯU ẢNH
+
+            // 3. XỬ LÝ LƯU ẢNH QUA STORAGE SERVER (SERVER 1)
             string relativeFilePaths = "";
             if (model.fuAnhCSKH != null && model.fuAnhCSKH.Count > 0)
             {
-                try
+                List<string> listSavedUrls = new List<string>();
+                int fileIndex = 1;
+
+                foreach (var file in model.fuAnhCSKH)
                 {
-                    List<string> listSavedUrls = new List<string>();
-                    int fileIndex = 1;
-
-                    foreach (var file in model.fuAnhCSKH)
+                    if (file.Length > 0)
                     {
-                        if (file.Length > 0)
+                        string ext = Path.GetExtension(file.FileName).ToLower();
+                        if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif")
                         {
-                            string ext = Path.GetExtension(file.FileName).ToLower();
-                            if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif")
+                            string newFileName = $"{model.PhieuId}_{DateTime.Now:yyyyMMddHHmmss}_{fileIndex}{ext}";
+
+                            // 1. Đường dẫn vật lý gửi sang Server 1 (Lưu vào thư mục con MatLuoi):
+                            // Server 1 sẽ lưu tại: D:\DataUpload\MatLuoi\{newFileName}
+                            string targetPathOnServer1 = $"MatLuoi/{newFileName}";
+
+                            // 2. Gửi file sang Server 1:
+                            bool isSaved = await _fileStorageService.SaveFileAsync(targetPathOnServer1, file);
+                            if (!isSaved)
                             {
-                                string newFileName = $"{model.PhieuId}_{DateTime.Now:yyyyMMddHHmmss}_{fileIndex}{ext}";
-                                if (!Directory.Exists(_physRoot)) Directory.CreateDirectory(_physRoot);
-
-                                string fullPath = Path.Combine(_physRoot, newFileName);
-                                using (var stream = new FileStream(fullPath, FileMode.Create))
-                                {
-                                    await file.CopyToAsync(stream);
-                                }
-
-                                listSavedUrls.Add("/uploads/MatLuoi/" + newFileName);
-                                fileIndex++;
+                                throw new Exception($"Không thể lưu file {newFileName} sang Server 1 (StorageServer)!");
                             }
+
+                            // 3. Chuỗi lưu vào Oracle Database (Đúng chuẩn /uploads/MatLuoi/... cũ của bạn):
+                            listSavedUrls.Add($"/uploads/MatLuoi/{newFileName}");
+                            fileIndex++;
                         }
                     }
-
-                    if (listSavedUrls.Count > 0) relativeFilePaths = string.Join(";", listSavedUrls);
                 }
-                catch (Exception ex)
+
+                if (listSavedUrls.Count > 0)
                 {
-                    System.Diagnostics.Debug.WriteLine("Lỗi upload: " + ex.Message);
-                    return false;
+                    relativeFilePaths = string.Join(";", listSavedUrls);
                 }
             }
 
+            // Nếu lần này không chọn ảnh mới, giữ lại ảnh cũ trong DB
             if (string.IsNullOrEmpty(relativeFilePaths))
             {
                 string rawDbPath = await GetExistingImagePathAsync(model.PhieuId);
                 if (!string.IsNullOrEmpty(rawDbPath))
                 {
-                    string[] tempUrls = rawDbPath.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-                    List<string> cleanDbPaths = new List<string>();
-                    foreach (var url in tempUrls)
-                    {
-                        if (url.StartsWith("/uploads/", StringComparison.OrdinalIgnoreCase)) cleanDbPaths.Add(url);
-                        else cleanDbPaths.Add("/uploads/MatLuoi/" + Path.GetFileName(url));
-                    }
-                    relativeFilePaths = string.Join(";", cleanDbPaths);
+                    relativeFilePaths = rawDbPath;
                 }
             }
+
+
 
             // BẮT BUỘC CÓ ẢNH NẾU CHỌN "THIẾT BỊ TỐT"
             if (model.DaThietBiTot && string.IsNullOrEmpty(relativeFilePaths))
@@ -756,61 +751,88 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<bool> DeleteImageUpgradeAsync(DeleteImageRequestDto model)
         {
+            // 1. KIỂM TRA SLA ĐỒNG BỘ 72 GIỜ (GIỐNG FRONTEND VÀ HÀM LƯU)
             using (var connSla = new OracleConnection(_connString))
             {
                 string slaQuery = "SELECT ROUND((SYSDATE - ngay_giao) * 24, 2) as hours_elapsed FROM brcd_dhgh_kehoach WHERE phieu_id = :phieu_id";
-                double hoursElapsed = await connSla.ExecuteScalarAsync<double>(slaQuery, new { phieu_id = model.PhieuId });
-                if (hoursElapsed > 24) return false;
+                var rawHours = await connSla.ExecuteScalarAsync<object>(slaQuery, new { phieu_id = model.PhieuId });
+
+                if (rawHours != null && rawHours != DBNull.Value)
+                {
+                    double hoursElapsed = Convert.ToDouble(rawHours);
+                    // Đồng bộ SLA thành 72h (hoặc tạm comment dòng if này nếu đang trong giai đoạn test)
+                    if (hoursElapsed > 72)
+                    {
+                        return false;
+                    }
+                }
             }
 
+            // 2. LẤY DANH SÁCH ẢNH HIỆN TẠI TRONG DATABASE
             string currentImagesRaw = await GetExistingImagePathAsync(model.PhieuId);
-            if (!string.IsNullOrEmpty(currentImagesRaw))
+            if (string.IsNullOrEmpty(currentImagesRaw))
             {
-                string[] imgUrls = currentImagesRaw.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-                List<string> remainingUrls = new List<string>();
-
-                foreach (string url in imgUrls)
-                {
-                    string dbFileName = Path.GetFileName(url.Trim());
-                    string clientFileName = Path.GetFileName(model.ImageUrl.Trim());
-
-                    if (dbFileName.ToLower() != clientFileName.ToLower())
-                    {
-                        remainingUrls.Add(url);
-                    }
-                    else
-                    {
-                        try
-                        {
-                            string fileName = Path.GetFileName(url);
-                            string fullPhysPath = Path.Combine(_physRoot, fileName);
-                            if (System.IO.File.Exists(fullPhysPath))
-                            {
-                                System.IO.File.Delete(fullPhysPath);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine("Lỗi xóa file: " + ex.Message);
-                        }
-                    }
-                }
-
-                string updatedImagesRaw = string.Join(";", remainingUrls);
-                using (var conn = new OracleConnection(_connString))
-                {
-                    string updateQuery = "UPDATE brcd_dhgh_xuly SET anh_cskh = :anh_cskh WHERE phieu_id = :phieu_id";
-                    await conn.ExecuteAsync(updateQuery, new
-                    {
-                        anh_cskh = !string.IsNullOrEmpty(updatedImagesRaw) ? (object)updatedImagesRaw : DBNull.Value,
-                        phieu_id = model.PhieuId
-                    });
-                }
-
-                return true;
+                return false;
             }
 
-            return false;
+            string[] imgUrls = currentImagesRaw.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            List<string> remainingUrls = new List<string>();
+            bool hasDeletedAny = false;
+
+            // Lấy tên file client muốn xóa (bỏ qua query param hoặc đường dẫn dài nếu có)
+            string clientFileName = Path.GetFileName(model.ImageUrl.Trim().Split('?')[0]);
+
+            foreach (string rawUrl in imgUrls)
+            {
+                string itemUrl = rawUrl.Trim();
+                string dbFileName = Path.GetFileName(itemUrl.Split('?')[0]);
+
+                // Nếu KHÔNG TRÙNG tên file thì giữ lại trong Database
+                if (!string.Equals(dbFileName, clientFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    remainingUrls.Add(itemUrl);
+                }
+                else
+                {
+                    // NẾU TRÙNG TÊN: TIẾN HÀNH XÓA FILE THẬT TRÊN SERVER 1
+                    try
+                    {
+                        // Chuẩn hóa đường dẫn tương đối để gửi sang Server 1 (StorageServer)
+                        // Ví dụ: "/uploads/MatLuoi/anh1.jpg" hoặc "matluoi/anh1.jpg" -> "matluoi/anh1.jpg"
+                        string targetPath = itemUrl.TrimStart('/');
+                        if (targetPath.StartsWith("uploads/MatLuoi/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            targetPath = targetPath.Substring("uploads/".Length); // Cắt bỏ chữ "uploads/"
+                        }
+                        else if (!targetPath.Contains("/"))
+                        {
+                            targetPath = "matluoi/" + targetPath;
+                        }
+
+                        // GỌI SANG SERVER 1 (STORAGE) ĐỂ XÓA TỆP VẬT LÝ
+                        await _fileStorageService.DeleteFileAsync(targetPath);
+                        hasDeletedAny = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine("Lỗi xóa file trên StorageServer: " + ex.Message);
+                    }
+                }
+            }
+
+            // 3. CẬP NHẬT LẠI DANH SÁCH ẢNH CÒN LẠI VÀO ORACLE DATABASE
+            string updatedImagesRaw = string.Join(";", remainingUrls);
+            using (var conn = new OracleConnection(_connString))
+            {
+                string updateQuery = "UPDATE brcd_dhgh_xuly SET anh_cskh = :anh_cskh WHERE phieu_id = :phieu_id";
+                await conn.ExecuteAsync(updateQuery, new
+                {
+                    anh_cskh = !string.IsNullOrEmpty(updatedImagesRaw) ? (object)updatedImagesRaw : DBNull.Value,
+                    phieu_id = model.PhieuId
+                });
+            }
+
+            return true;
         }
 
         public async Task<byte[]?> ExportExcelAsync(string? maDv, string? maNvkt, string nguyCo, string? search)
