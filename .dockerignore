@@ -1,0 +1,9 @@
+.git
+.vs
+**/bin
+**/obj
+**/appsettings.Local.json
+**/firebase-service-account.json
+**/*.user
+**/*.suo
+DatabaseScripts
