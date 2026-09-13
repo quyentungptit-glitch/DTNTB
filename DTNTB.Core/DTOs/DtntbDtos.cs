@@ -133,6 +133,16 @@ namespace DTNTB.Core.DTOs
         public string ImageUrl { get; set; } = string.Empty;
     }
 
+    public class RiskCountDto
+    {
+        public int Total { get; set; }
+        public int BinhThuong { get; set; }
+        public int TheoDoi { get; set; }
+        public int NguyCo { get; set; }
+        public int Cao { get; set; }
+        public int RatCao { get; set; }
+    }
+
     public class DropdownItemDto
     {
         public string Value { get; set; } = string.Empty;

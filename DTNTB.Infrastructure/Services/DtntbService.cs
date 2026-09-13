@@ -3,13 +3,16 @@ using Dapper;
 using DTNTB.Core.Constants;
 using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using ImageMagick;
 using Oracle.ManagedDataAccess.Client;
 using System;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace DTNTB.Infrastructure.Services
@@ -19,6 +22,10 @@ namespace DTNTB.Infrastructure.Services
         private readonly string _connString;
         private readonly ICurrentUserService _currentUser;
         private readonly IFileStorageService _fileStorageService; // <-- 1. DỊCH VỤ STORAGE NỘI BỘ
+        private readonly long _maxImageSizeBytes;
+        private readonly int _maxImagesPerRequest;
+        private readonly int _maxImageDimension;
+        private readonly int _jpegQuality;
 
         public DtntbService(
             IConfiguration config,
@@ -28,6 +35,98 @@ namespace DTNTB.Infrastructure.Services
             _connString = config.GetConnectionString("ConnectionString_NBH") ?? string.Empty;
             _currentUser = currentUser;
             _fileStorageService = fileStorageService;
+            var maxImageSizeMb = int.TryParse(config["Upload:MaxFileSizeInMB"], out var configuredMaxImageSizeMb)
+                ? Math.Clamp(configuredMaxImageSizeMb, 1, 20)
+                : 10;
+            _maxImageSizeBytes = maxImageSizeMb * 1024L * 1024L;
+            _maxImagesPerRequest = int.TryParse(config["Upload:MaxFilesPerRequest"], out var configuredMaxFiles)
+                ? Math.Clamp(configuredMaxFiles, 1, 10)
+                : 5;
+            _maxImageDimension = int.TryParse(config["ImageOptimization:MaxDimension"], out var configuredMaxDimension)
+                ? Math.Clamp(configuredMaxDimension, 1280, 3840)
+                : 1920;
+            _jpegQuality = int.TryParse(config["ImageOptimization:JpegQuality"], out var configuredJpegQuality)
+                ? Math.Clamp(configuredJpegQuality, 75, 95)
+                : 85;
+        }
+
+        private async Task<bool> HasRecordAccessAsync(OracleConnection conn, string? recordMaDv, string? recordMaNv)
+        {
+            var normalizedMaDv = recordMaDv?.Trim() ?? "";
+            switch (_currentUser.ScopeLevel)
+            {
+                case UserDataScopeLevel.ToanTinh:
+                    return true;
+                case UserDataScopeLevel.DiaBan:
+                    if (string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return false;
+                    const string diaBanQuery = @"SELECT COUNT(1) FROM v_donvi_diaban db
+                        WHERE SUBSTR(TRIM(db.ma_dv), 1, 7) = SUBSTR(TRIM(:ma_dv), 1, 7)
+                          AND TRIM(db.diaban_id) = TRIM(:diaban_id)";
+                    return await conn.ExecuteScalarAsync<int>(diaBanQuery, new
+                    {
+                        ma_dv = normalizedMaDv,
+                        diaban_id = _currentUser.DiaBanId
+                    }) > 0;
+                case UserDataScopeLevel.DonVi:
+                    return string.Equals(
+                        normalizedMaDv.Length > 7 ? normalizedMaDv.Substring(0, 7) : normalizedMaDv,
+                        _currentUser.MaDv7,
+                        StringComparison.OrdinalIgnoreCase);
+                case UserDataScopeLevel.ToQuanLy:
+                    return string.Equals(
+                        normalizedMaDv.Length > 11 ? normalizedMaDv.Substring(0, 11) : normalizedMaDv,
+                        _currentUser.MaDv11,
+                        StringComparison.OrdinalIgnoreCase);
+                case UserDataScopeLevel.NhanVien:
+                    return string.Equals(recordMaNv?.Trim(), _currentUser.MaNv, StringComparison.OrdinalIgnoreCase);
+                default:
+                    return false;
+            }
+        }
+
+        private static async Task<bool> IsAllowedImageAsync(IFormFile file, string extension)
+        {
+            await using var stream = file.OpenReadStream();
+            var header = new byte[12];
+            var bytesRead = await stream.ReadAsync(header, 0, header.Length);
+
+            var isJpeg = bytesRead >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF;
+            var isPng = bytesRead >= 8 && header.Take(8).SequenceEqual(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+            var isGif = bytesRead >= 6 && Encoding.ASCII.GetString(header, 0, 6) is "GIF87a" or "GIF89a";
+
+            return (isJpeg && (extension == ".jpg" || extension == ".jpeg"))
+                || (isPng && extension == ".png")
+                || (isGif && extension == ".gif");
+        }
+
+        private async Task<(byte[] Content, string ContentType)?> OptimizeImageAsync(IFormFile file, string extension)
+        {
+            // GIF có thể là ảnh động; giữ nguyên để không làm mất animation.
+            if (extension == ".gif") return null;
+
+            await using var input = file.OpenReadStream();
+            using var image = new MagickImage(input);
+            image.AutoOrient();
+            image.Resize(new MagickGeometry((uint)_maxImageDimension, (uint)_maxImageDimension) { Greater = true });
+            image.Strip(); // Bỏ metadata/thumbnail không cần thiết sau khi đã xoay đúng chiều.
+
+            if (extension is ".jpg" or ".jpeg")
+            {
+                image.Format = MagickFormat.Jpeg;
+                image.Quality = (uint)_jpegQuality;
+            }
+            else
+            {
+                // PNG giữ nguyên chất lượng; chỉ nén lossless và hạ kích thước khi quá lớn.
+                image.Format = MagickFormat.Png;
+            }
+
+            var optimizedContent = image.ToByteArray();
+
+            // Không thay thế nếu định dạng gốc đã nén tốt hơn.
+            if (optimizedContent.Length >= file.Length) return null;
+
+            return (optimizedContent, extension is ".jpg" or ".jpeg" ? "image/jpeg" : "image/png");
         }
 
         public async Task<List<DropdownItemDto>?> GetDonViAsync()
@@ -50,6 +149,22 @@ namespace DTNTB.Infrastructure.Services
 
             if (_currentUser.ScopeLevel == UserDataScopeLevel.DonVi && _currentUser.MaDv7 != filterMaDv7) return null;
             if (_currentUser.ScopeLevel == UserDataScopeLevel.ToQuanLy && _currentUser.MaDv11 != filterMaDv11) return null;
+            if (_currentUser.ScopeLevel == UserDataScopeLevel.NhanVien && !string.Equals(_currentUser.MaDv, maDv, StringComparison.OrdinalIgnoreCase)) return null;
+
+            if (_currentUser.ScopeLevel == UserDataScopeLevel.DiaBan)
+            {
+                if (maDv == "ALL" || string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return null;
+                using var scopeConn = new OracleConnection(_connString);
+                const string scopeQuery = @"SELECT COUNT(1) FROM v_donvi_diaban db
+                    WHERE SUBSTR(TRIM(db.ma_dv), 1, 7) = SUBSTR(TRIM(:ma_dv), 1, 7)
+                      AND TRIM(db.diaban_id) = TRIM(:diaban_id)";
+                var hasAccess = await scopeConn.ExecuteScalarAsync<int>(scopeQuery, new
+                {
+                    ma_dv = maDv,
+                    diaban_id = _currentUser.DiaBanId
+                }) > 0;
+                if (!hasAccess) return null;
+            }
 
             var list = new List<DropdownItemDto>
             {
@@ -212,6 +327,33 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
+        public async Task<RiskCountDto> GetRiskCountAsync(string? maDv, string? maNvkt, string? search)
+        {
+            // Không áp dụng lọc nguy cơ tại đây để app luôn nhận được toàn bộ các số đếm.
+            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, "ALL", search);
+            const string countSelect = @"
+                SELECT
+                    COUNT(1) AS Total,
+                    NVL(SUM(CASE WHEN t.diem_tin_nhiem <= 25 THEN 1 ELSE 0 END), 0) AS BinhThuong,
+                    NVL(SUM(CASE WHEN t.diem_tin_nhiem > 25 AND t.diem_tin_nhiem <= 28 THEN 1 ELSE 0 END), 0) AS TheoDoi,
+                    NVL(SUM(CASE WHEN t.diem_tin_nhiem > 28 AND t.diem_tin_nhiem <= 31 THEN 1 ELSE 0 END), 0) AS NguyCo,
+                    NVL(SUM(CASE WHEN t.diem_tin_nhiem > 31 AND t.diem_tin_nhiem <= 40 THEN 1 ELSE 0 END), 0) AS Cao,
+                    NVL(SUM(CASE WHEN t.diem_tin_nhiem > 40 THEN 1 ELSE 0 END), 0) AS RatCao
+                FROM brcd_dhgh_kehoach t";
+
+            using var conn = new OracleConnection(_connString);
+            var result = await conn.QuerySingleAsync<dynamic>(countSelect + filterClause, parameters);
+            return new RiskCountDto
+            {
+                Total = Convert.ToInt32(result.TOTAL),
+                BinhThuong = Convert.ToInt32(result.BINHTHUONG),
+                TheoDoi = Convert.ToInt32(result.THEODOI),
+                NguyCo = Convert.ToInt32(result.NGUYCO),
+                Cao = Convert.ToInt32(result.CAO),
+                RatCao = Convert.ToInt32(result.RATCAO)
+            };
+        }
+
         public static int TinhDiemCuoc(double soThang, bool isTrichNo)
         {
             if (soThang >= 10.0) return 0;
@@ -258,14 +400,7 @@ namespace DTNTB.Infrastructure.Services
                 var result = await conn.QueryFirstOrDefaultAsync<dynamic>(query, new { phieu_id = phieuId });
                 if (result == null) return null;
 
-                string rawSubDV = result.MA_DV?.ToString() ?? "";
-                string subMaDV7 = rawSubDV.Length > 7 ? rawSubDV.Substring(0, 7) : rawSubDV;
-                string subMaDV11 = rawSubDV.Length > 11 ? rawSubDV.Substring(0, 11) : rawSubDV;
-                string recordNvkt = result.MA_NVKT?.ToString()?.Trim() ?? "";
-
-                if (_currentUser.ScopeLevel == UserDataScopeLevel.DonVi && subMaDV7 != _currentUser.MaDv7) return null;
-                if (_currentUser.ScopeLevel == UserDataScopeLevel.ToQuanLy && subMaDV11 != _currentUser.MaDv11) return null;
-                if (_currentUser.ScopeLevel == UserDataScopeLevel.NhanVien && !string.Equals(recordNvkt, _currentUser.MaNv, StringComparison.OrdinalIgnoreCase)) return null;
+                if (!await HasRecordAccessAsync(conn, result.MA_DV?.ToString(), result.MA_NVKT?.ToString())) return null;
 
                 // SLA 72 GIỜ
                 double hoursElapsed = result.HOURS_ELAPSED != null ? Convert.ToDouble(result.HOURS_ELAPSED) : 0;
@@ -287,7 +422,7 @@ namespace DTNTB.Infrastructure.Services
                 if (!string.IsNullOrEmpty(rawImgString))
                 {
                     listImages = rawImgString.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
-                                             .Select(s => s.Trim().Replace('\\', '/'))
+                                             .Select(s => ToServer2MediaUrl(s.Trim().Replace('\\', '/')))
                                              .ToList();
                 }
 
@@ -379,6 +514,25 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
+        /// <summary>
+        /// Chuyển đường dẫn ảnh lưu trong DB (dạng cũ "/uploads/MatLuoi/xxx.jpg" 
+        /// hoặc dạng mới "MatLuoi/xxx.jpg") thành URL Angular gọi qua Server 2,
+        /// không bao giờ để lộ path/domain của Server 1.
+        /// </summary>
+        private static string ToServer2MediaUrl(string rawDbPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawDbPath)) return "";
+
+            var clean = rawDbPath.TrimStart('/');
+
+            if (clean.StartsWith("uploads/", StringComparison.OrdinalIgnoreCase))
+            {
+                clean = clean.Substring("uploads/".Length); // "/uploads/MatLuoi/x.jpg" -> "MatLuoi/x.jpg"
+            }
+
+            return $"/api/media/{clean}"; // Angular luôn gọi endpoint này trên Server 2
+        }
+
         private async Task<List<LichSuTacNghiepDto>> GetLichSuTacNghiepAsync(string thuebaoId, string phanvungId)
         {
             using (var conn = new OracleConnection(_connString))
@@ -435,12 +589,7 @@ namespace DTNTB.Infrastructure.Services
                 double hoursElapsed = Convert.ToDouble(target.HOURS_ELAPSED);
                 if (hoursElapsed > 72) return false;
 
-                string recordDv7 = (target.MA_DV?.ToString() ?? "").Length > 7 ? target.MA_DV.ToString().Substring(0, 7) : target.MA_DV?.ToString();
-                string recordDv11 = (target.MA_DV?.ToString() ?? "").Length > 11 ? target.MA_DV.ToString().Substring(0, 11) : target.MA_DV?.ToString();
-
-                if (_currentUser.ScopeLevel == UserDataScopeLevel.NhanVien && target.MA_NVKT?.ToString() != maNv) return false;
-                if (_currentUser.ScopeLevel == UserDataScopeLevel.ToQuanLy && recordDv11 != _currentUser.MaDv11) return false;
-                if (_currentUser.ScopeLevel == UserDataScopeLevel.DonVi && recordDv7 != _currentUser.MaDv7) return false;
+                if (!await HasRecordAccessAsync(connSla, target.MA_DV?.ToString(), target.MA_NVKT?.ToString())) return false;
             }
 
             // 2. LỚP KIỂM TRA (VALIDATION)
@@ -461,6 +610,8 @@ namespace DTNTB.Infrastructure.Services
             string relativeFilePaths = "";
             if (model.fuAnhCSKH != null && model.fuAnhCSKH.Count > 0)
             {
+                if (model.fuAnhCSKH.Count > _maxImagesPerRequest) return false;
+
                 List<string> listSavedUrls = new List<string>();
                 int fileIndex = 1;
 
@@ -469,6 +620,11 @@ namespace DTNTB.Infrastructure.Services
                     if (file.Length > 0)
                     {
                         string ext = Path.GetExtension(file.FileName).ToLower();
+                        if (file.Length > _maxImageSizeBytes || !await IsAllowedImageAsync(file, ext))
+                        {
+                            return false;
+                        }
+
                         if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif")
                         {
                             string newFileName = $"{model.PhieuId}_{DateTime.Now:yyyyMMddHHmmss}_{fileIndex}{ext}";
@@ -477,8 +633,30 @@ namespace DTNTB.Infrastructure.Services
                             // Server 1 sẽ lưu tại: D:\DataUpload\MatLuoi\{newFileName}
                             string targetPathOnServer1 = $"MatLuoi/{newFileName}";
 
-                            // 2. Gửi file sang Server 1:
-                            bool isSaved = await _fileStorageService.SaveFileAsync(targetPathOnServer1, file);
+                            // 2. Tối ưu ảnh trước khi gửi: JPEG chất lượng cao, PNG lossless.
+                            // Nếu ảnh gốc đã nhỏ hơn sau tối ưu thì giữ nguyên ảnh gốc.
+                            var optimizedImage = await OptimizeImageAsync(file, ext);
+                            bool isSaved;
+                            if (optimizedImage is null)
+                            {
+                                isSaved = await _fileStorageService.SaveFileAsync(targetPathOnServer1, file);
+                            }
+                            else
+                            {
+                                await using var optimizedStream = new MemoryStream(optimizedImage.Value.Content, writable: false);
+                                var optimizedFile = new FormFile(
+                                    optimizedStream,
+                                    0,
+                                    optimizedImage.Value.Content.Length,
+                                    "file",
+                                    newFileName)
+                                {
+                                    Headers = new HeaderDictionary(),
+                                    ContentType = optimizedImage.Value.ContentType
+                                };
+                                isSaved = await _fileStorageService.SaveFileAsync(targetPathOnServer1, optimizedFile);
+                            }
+
                             if (!isSaved)
                             {
                                 throw new Exception($"Không thể lưu file {newFileName} sang Server 1 (StorageServer)!");
@@ -487,6 +665,10 @@ namespace DTNTB.Infrastructure.Services
                             // 3. Chuỗi lưu vào Oracle Database (Đúng chuẩn /uploads/MatLuoi/... cũ của bạn):
                             listSavedUrls.Add($"/uploads/MatLuoi/{newFileName}");
                             fileIndex++;
+                        }
+                        else
+                        {
+                            return false;
                         }
                     }
                 }
@@ -754,12 +936,17 @@ namespace DTNTB.Infrastructure.Services
             // 1. KIỂM TRA SLA ĐỒNG BỘ 72 GIỜ (GIỐNG FRONTEND VÀ HÀM LƯU)
             using (var connSla = new OracleConnection(_connString))
             {
-                string slaQuery = "SELECT ROUND((SYSDATE - ngay_giao) * 24, 2) as hours_elapsed FROM brcd_dhgh_kehoach WHERE phieu_id = :phieu_id";
-                var rawHours = await connSla.ExecuteScalarAsync<object>(slaQuery, new { phieu_id = model.PhieuId });
-
-                if (rawHours != null && rawHours != DBNull.Value)
+                string slaQuery = "SELECT ROUND((SYSDATE - ngay_giao) * 24, 2) as hours_elapsed, ma_dv, ma_nvkt FROM brcd_dhgh_kehoach WHERE phieu_id = :phieu_id";
+                var target = await connSla.QueryFirstOrDefaultAsync<dynamic>(slaQuery, new { phieu_id = model.PhieuId });
+                if (target == null || !await HasRecordAccessAsync(connSla, target.MA_DV?.ToString(), target.MA_NVKT?.ToString()))
                 {
-                    double hoursElapsed = Convert.ToDouble(rawHours);
+                    return false;
+                }
+
+                object? hoursElapsedRaw = target.HOURS_ELAPSED;
+                if (hoursElapsedRaw is not null && hoursElapsedRaw is not DBNull)
+                {
+                    double hoursElapsed = Convert.ToDouble(hoursElapsedRaw);
                     // Đồng bộ SLA thành 72h (hoặc tạm comment dòng if này nếu đang trong giai đoạn test)
                     if (hoursElapsed > 72)
                     {
@@ -934,12 +1121,57 @@ namespace DTNTB.Infrastructure.Services
 
         private async Task<string> GetExistingImagePathAsync(long phieuId)
         {
-            using (var conn = new OracleConnection(_connString))
+            using var conn = new OracleConnection(_connString);
+            // Oracle có thể trả CLOB cho cột ANH_CSKH. Dùng dynamic rồi ToString()
+            // tránh InvalidCastException từ ExecuteScalarAsync<string> khi xóa ảnh.
+            const string query = "SELECT anh_cskh FROM brcd_dhgh_xuly WHERE phieu_id = :phieu_id";
+            var result = await conn.QueryFirstOrDefaultAsync<dynamic>(query, new { phieu_id = phieuId });
+            return result?.ANH_CSKH?.ToString()?.Trim() ?? "";
+        }
+
+        public async Task<(Stream Stream, string ContentType)?> GetImageAsync(long phieuId, string fileNameOrRelativePath)
+        {
+            if (phieuId <= 0 || string.IsNullOrWhiteSpace(fileNameOrRelativePath)) return null;
+
+            // Chuẩn hóa input về đúng path trên Server 1: "MatLuoi/ten_file.jpg"
+            // Chấp nhận các dạng: "/uploads/MatLuoi/x.jpg", "uploads/MatLuoi/x.jpg", "MatLuoi/x.jpg", hoặc chỉ "x.jpg"
+            string targetPath = fileNameOrRelativePath.Trim().TrimStart('/');
+
+            if (targetPath.StartsWith("uploads/", StringComparison.OrdinalIgnoreCase))
             {
-                string query = "SELECT anh_cskh FROM brcd_dhgh_xuly WHERE phieu_id = :phieu_id";
-                var result = await conn.ExecuteScalarAsync<string>(query, new { phieu_id = phieuId });
-                return result?.Trim() ?? "";
+                targetPath = targetPath.Substring("uploads/".Length); // -> "MatLuoi/x.jpg"
             }
+            else if (!targetPath.Contains("/"))
+            {
+                targetPath = "MatLuoi/" + targetPath; // chỉ có tên file -> thêm thư mục con
+            }
+
+            var fileName = Path.GetFileName(targetPath);
+            if (!targetPath.StartsWith("MatLuoi/", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(fileName)
+                || !string.Equals(targetPath, $"MatLuoi/{fileName}", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            using var conn = new OracleConnection(_connString);
+            const string accessQuery = @"
+                SELECT t.ma_dv, t.ma_nvkt
+                FROM brcd_dhgh_xuly xl
+                INNER JOIN brcd_dhgh_kehoach t ON t.phieu_id = xl.phieu_id
+                WHERE xl.phieu_id = :phieu_id
+                  AND INSTR(LOWER(NVL(xl.anh_cskh, '')), LOWER(:file_name)) > 0";
+            var record = await conn.QueryFirstOrDefaultAsync<dynamic>(accessQuery, new
+            {
+                phieu_id = phieuId,
+                file_name = fileName
+            });
+            if (record == null || !await HasRecordAccessAsync(conn, record.MA_DV?.ToString(), record.MA_NVKT?.ToString()))
+            {
+                return null;
+            }
+
+            return await _fileStorageService.GetFileStreamAsync(targetPath);
         }
     }
 }

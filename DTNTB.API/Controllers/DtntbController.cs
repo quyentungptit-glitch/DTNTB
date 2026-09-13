@@ -13,10 +13,12 @@ namespace DTNTB.API.Controllers
     public class DtntbController : ControllerBase
     {
         private readonly IDtntbService _dtntbService;
+        private readonly ILogger<DtntbController> _logger;
 
-        public DtntbController(IDtntbService dtntbService)
+        public DtntbController(IDtntbService dtntbService, ILogger<DtntbController> logger)
         {
             _dtntbService = dtntbService;
+            _logger = logger;
         }
 
         [HttpGet("donvi")]
@@ -47,6 +49,15 @@ namespace DTNTB.API.Controllers
             return Ok(result);
         }
 
+        [HttpGet("riskCount")]
+        [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
+        public async Task<IActionResult> GetRiskCount(
+            [FromQuery] string? maDv, [FromQuery] string? maNvkt, [FromQuery] string? search = null)
+        {
+            var result = await _dtntbService.GetRiskCountAsync(maDv, maNvkt, search);
+            return Ok(result);
+        }
+
         [HttpGet("{phieuId}")]
         [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
         public async Task<IActionResult> GetDetail(long phieuId)
@@ -69,9 +80,18 @@ namespace DTNTB.API.Controllers
         [Authorize(Policy = AppPermissions.DTNTB.ACTION)]
         public async Task<IActionResult> DeleteImageUpgrade([FromBody] DeleteImageRequestDto model)
         {
-            var success = await _dtntbService.DeleteImageUpgradeAsync(model);
-            if (!success) return BadRequest(new { message = "Xóa ảnh thất bại hoặc phiếu quá hạn SLA 24h." });
-            return Ok(new { success = true, message = "Xóa ảnh hiện trường thành công." });
+            try
+            {
+                var success = await _dtntbService.DeleteImageUpgradeAsync(model);
+                if (!success) return BadRequest(new { message = "Xóa ảnh thất bại, không có quyền hoặc phiếu đã quá SLA 72h." });
+                return Ok(new { success = true, message = "Xóa ảnh hiện trường thành công." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Không thể xóa ảnh của phiếu {PhieuId}", model.PhieuId);
+                return StatusCode(StatusCodes.Status500InternalServerError,
+                    new { message = "Máy chủ chưa thể xóa ảnh. Vui lòng thử lại sau." });
+            }
         }
 
         [HttpGet("export-excel")]

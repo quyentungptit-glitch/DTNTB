@@ -3,6 +3,7 @@ using DTNTB.Core.Constants;
 using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using Oracle.ManagedDataAccess.Client;
@@ -22,16 +23,22 @@ namespace DTNTB.Infrastructure.Services
     {
         private readonly IConfiguration _config;
         private readonly HttpClient _httpClient;
+        private readonly ILogger<AuthService> _logger;
         private readonly string _connString;
+        private readonly string _ssoApiKey;
+        private readonly string _ssoBaseUrl;
 
-        private const string API_KEY = "U1NPX05CSF9OT0lCT19WbnAxQDIwMmIj";
-        private const string BASE_API_URL = "http://10.40.41.75:5000/api/sso/";
-
-        public AuthService(IConfiguration config, HttpClient httpClient)
+        public AuthService(IConfiguration config, HttpClient httpClient, ILogger<AuthService> logger)
         {
             _config = config;
             _httpClient = httpClient;
+            _logger = logger;
             _connString = _config.GetConnectionString("ConnectionString_NBH") ?? string.Empty;
+            _ssoApiKey = _config["Sso:ApiKey"]
+                ?? throw new InvalidOperationException("Sso:ApiKey chưa được cấu hình.");
+            _ssoBaseUrl = (_config["Sso:BaseUrl"]
+                ?? throw new InvalidOperationException("Sso:BaseUrl chưa được cấu hình."))
+                .TrimEnd('/') + "/";
         }
 
         /// <summary>
@@ -88,10 +95,10 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 // Nếu là mật khẩu thường thì mới gọi sang SSO để xác thực và gửi OTP
-                var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
+                var loginData = new { username = request.Username, password = request.Password, apiKey = _ssoApiKey };
                 var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithuser", content);
+                var response = await _httpClient.PostAsync($"{_ssoBaseUrl}loginwithuser", content);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (!response.IsSuccessStatusCode)
@@ -126,7 +133,8 @@ namespace DTNTB.Infrastructure.Services
             }
             catch (Exception ex)
             {
-                return new LoginResponseDto { Status = "Error", Message = "Lỗi hệ thống: " + ex.Message };
+                _logger.LogError(ex, "Đăng nhập bước 1 thất bại cho tài khoản {Username}", request.Username);
+                return new LoginResponseDto { Status = "Error", Message = "Không thể xử lý đăng nhập lúc này. Vui lòng thử lại." };
             }
         }
 
@@ -141,13 +149,13 @@ namespace DTNTB.Infrastructure.Services
                 {
                     username = request.Username,
                     password = request.Password,
-                    apiKey = API_KEY,
+                    apiKey = _ssoApiKey,
                     otp = request.Otp,
                     execution = request.Execution
                 };
 
                 var content = new StringContent(JsonConvert.SerializeObject(otpData), Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithotp", content);
+                var response = await _httpClient.PostAsync($"{_ssoBaseUrl}loginwithotp", content);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (!response.IsSuccessStatusCode)
@@ -166,7 +174,8 @@ namespace DTNTB.Infrastructure.Services
             }
             catch (Exception ex)
             {
-                return new LoginResponseDto { Status = "Error", Message = "Lỗi xác thực OTP: " + ex.Message };
+                _logger.LogError(ex, "Xác thực OTP thất bại cho tài khoản {Username}", request.Username);
+                return new LoginResponseDto { Status = "Error", Message = "Không thể xác thực OTP lúc này. Vui lòng thử lại." };
             }
         }
 
@@ -218,9 +227,9 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 // Ngược lại, xác thực bình thường qua SSO
-                var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
+                var loginData = new { username = request.Username, password = request.Password, apiKey = _ssoApiKey };
                 var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithuser", content);
+                var response = await _httpClient.PostAsync($"{_ssoBaseUrl}loginwithuser", content);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (!response.IsSuccessStatusCode)
@@ -239,7 +248,8 @@ namespace DTNTB.Infrastructure.Services
             }
             catch (Exception ex)
             {
-                return new LoginResponseDto { Status = "Error", Message = "Lỗi khi chuyển đổi Token: " + ex.Message };
+                _logger.LogError(ex, "Chuyển đổi token thất bại cho tài khoản {Username}", request.Username);
+                return new LoginResponseDto { Status = "Error", Message = "Không thể chuyển đổi token lúc này. Vui lòng thử lại." };
             }
         }
 
@@ -250,7 +260,8 @@ namespace DTNTB.Infrastructure.Services
         {
             try
             {
-                string configuredKey = _config["SystemToSystem:SecretKey"] ?? "VNPT_NBH_S2S_Direct_Secure_Bypass_OTP_Key_2026";
+                string configuredKey = _config["SystemToSystem:SecretKey"]
+                    ?? throw new InvalidOperationException("SystemToSystem:SecretKey chưa được cấu hình.");
                 if (request.SecretKey != configuredKey)
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Khóa bảo mật đi kèm không chính xác." };
@@ -263,9 +274,9 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 // Ngược lại, xác thực bình thường qua SSO
-                var loginData = new { username = request.Username, password = request.Password, apiKey = API_KEY };
+                var loginData = new { username = request.Username, password = request.Password, apiKey = _ssoApiKey };
                 var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync($"{BASE_API_URL}loginwithuser", content);
+                var response = await _httpClient.PostAsync($"{_ssoBaseUrl}loginwithuser", content);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 if (!response.IsSuccessStatusCode)
@@ -283,7 +294,8 @@ namespace DTNTB.Infrastructure.Services
             }
             catch (Exception ex)
             {
-                return new LoginResponseDto { Status = "Error", Message = "Lỗi đăng nhập trực tiếp: " + ex.Message };
+                _logger.LogError(ex, "Đăng nhập trực tiếp thất bại cho tài khoản {Username}", request.Username);
+                return new LoginResponseDto { Status = "Error", Message = "Không thể xử lý đăng nhập lúc này. Vui lòng thử lại." };
             }
         }
 
@@ -381,7 +393,9 @@ namespace DTNTB.Infrastructure.Services
         private string GenerateJwtToken(UserProfileDto user)
         {
             var tokenHandler = new JwtSecurityTokenHandler();
-            var key = Encoding.ASCII.GetBytes(_config["Jwt:Key"] ?? "Trung_Tam_Ha_Tang_Ma_Bao_Mat_Mac_Dinh_256_bit_VNPT");
+            var jwtKey = _config["Jwt:Key"]
+                ?? throw new InvalidOperationException("Jwt:Key chưa được cấu hình.");
+            var key = Encoding.UTF8.GetBytes(jwtKey);
 
             var claims = new List<Claim>
             {

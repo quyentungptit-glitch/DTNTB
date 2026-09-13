@@ -4,19 +4,26 @@ using FirebaseAdmin;
 using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using System.IO;
 using System.Text;
+using System.Threading.RateLimiting;
 using DTNTB.API.Security;
-using Microsoft.AspNetCore.HttpOverrides; // <-- 1. THÊM MỚI
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
 
 // ==========================================
 // 1. KHỞI TẠO FIREBASE
 // ==========================================
-var firebaseKeyPath = Path.Combine(builder.Environment.ContentRootPath, "firebase-service-account.json");
+var configuredFirebaseKeyPath = builder.Configuration["Firebase:ServiceAccountPath"];
+var firebaseKeyPath = string.IsNullOrWhiteSpace(configuredFirebaseKeyPath)
+    ? string.Empty
+    : Path.IsPathFullyQualified(configuredFirebaseKeyPath)
+        ? configuredFirebaseKeyPath
+        : Path.Combine(builder.Environment.ContentRootPath, configuredFirebaseKeyPath);
 if (System.IO.File.Exists(firebaseKeyPath))
 {
     FirebaseApp.Create(new AppOptions()
@@ -48,14 +55,18 @@ builder.Services.AddHttpClient<IFileStorageService, RemoteFileStorageService>(cl
 builder.Services.Configure<ForwardedHeadersOptions>(options => // <-- 2. THÊM MỚI
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownNetworks.Clear();
-    options.KnownProxies.Clear();
 });
 
 // ==========================================
 // 3. CẤU HÌNH JWT AUTHENTICATION
 // ==========================================
-var key = Encoding.ASCII.GetBytes(builder.Configuration["Jwt:Key"] ?? "Trung_Tam_Ha_Tang_Ma_Bao_Mat_Mac_Dinh_256_bit_VNPT");
+var jwtKey = builder.Configuration["Jwt:Key"]
+    ?? throw new InvalidOperationException("Jwt:Key chưa được cấu hình.");
+var jwtIssuer = builder.Configuration["Jwt:Issuer"]
+    ?? throw new InvalidOperationException("Jwt:Issuer chưa được cấu hình.");
+var jwtAudience = builder.Configuration["Jwt:Audience"]
+    ?? throw new InvalidOperationException("Jwt:Audience chưa được cấu hình.");
+var key = Encoding.UTF8.GetBytes(jwtKey);
 builder.Services.AddAuthentication(x =>
 {
     x.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -63,31 +74,52 @@ builder.Services.AddAuthentication(x =>
 })
 .AddJwtBearer(x =>
 {
-    x.RequireHttpsMetadata = false;
-    x.SaveToken = true;
+    x.RequireHttpsMetadata = true;
+    x.SaveToken = false;
     x.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(key),
-        ValidateIssuer = false,
-        ValidateAudience = false
+        ValidateIssuer = true,
+        ValidIssuer = jwtIssuer,
+        ValidateAudience = true,
+        ValidAudience = jwtAudience,
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.FromMinutes(1)
     };
 });
 
 // ==========================================
 // 4. CẤU HÌNH CORS (CHUẨN BẢO MẬT HƠN)
 // ==========================================
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?.Where(origin => Uri.TryCreate(origin, UriKind.Absolute, out _))
+    .ToArray() ?? Array.Empty<string>();
+if (allowedOrigins.Length == 0)
+{
+    throw new InvalidOperationException("Cors:AllowedOrigins chưa được cấu hình.");
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngular", policy =>
     {
-        policy.WithOrigins(
-                "http://localhost:4200",
-                "https://clm.vnptninhbinh.com.vn"
-              )
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
+    });
+});
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddFixedWindowLimiter("auth", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = 5;
+        limiterOptions.Window = TimeSpan.FromMinutes(1);
+        limiterOptions.QueueLimit = 0;
+        limiterOptions.AutoReplenishment = true;
     });
 });
 
@@ -125,30 +157,16 @@ var app = builder.Build();
 // Nhận diện IP/Domain từ Reverse Proxy (phải nằm đầu tiên)
 app.UseForwardedHeaders(); // <-- 3. ĐẶT ĐẦU TIÊN
 
-// Chỉ mở Swagger khi chạy Dev ở máy
-if (app.Environment.IsDevelopment()) // <-- 4. BỌC LẠI
+// Swagger chỉ dùng khi phát triển nội bộ.
+if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-app.UseSwagger();
-app.UseSwaggerUI();
-
 app.UseCors("AllowAngular");
-
-// Cấu hình Static Files đưa lên trước Authentication & Controllers
-var physRoot = builder.Configuration["MatLuoi:PhysRoot"] ?? "D:\\DataUpload\\matluoi\\";
-if (!Directory.Exists(physRoot))
-{
-    Directory.CreateDirectory(physRoot);
-}
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider(physRoot),
-    RequestPath = "/uploads/matluoi"
-});
-
+app.UseHttpsRedirection();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

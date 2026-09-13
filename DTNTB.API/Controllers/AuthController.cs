@@ -2,6 +2,7 @@
 using DTNTB.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.Tasks;
 
 namespace DTNTB.API.Controllers
@@ -18,6 +19,7 @@ namespace DTNTB.API.Controllers
         }
 
         [HttpPost("login")]
+        [EnableRateLimiting("auth")]
         public async Task<IActionResult> Login([FromBody] LoginRequestDto model)
         {
             if (model == null || string.IsNullOrEmpty(model.Username) || string.IsNullOrEmpty(model.Password))
@@ -35,6 +37,7 @@ namespace DTNTB.API.Controllers
         }
 
         [HttpPost("verify-otp")]
+        [EnableRateLimiting("auth")]
         public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpRequestDto model)
         {
             if (model == null || string.IsNullOrEmpty(model.Otp) || string.IsNullOrEmpty(model.Execution))
@@ -52,6 +55,7 @@ namespace DTNTB.API.Controllers
         }
 
         [HttpPost("convert-token")]
+        [EnableRateLimiting("auth")]
         public async Task<IActionResult> ConvertToken([FromBody] TokenConversionRequestDto model)
         {
             if (model == null || string.IsNullOrEmpty(model.Username) ||
@@ -71,6 +75,7 @@ namespace DTNTB.API.Controllers
         }
 
         [HttpPost("direct-login")]
+        [EnableRateLimiting("auth")]
         public async Task<IActionResult> DirectLogin([FromBody] DirectLoginRequestDto model)
         {
             if (model == null || string.IsNullOrEmpty(model.Username) ||
