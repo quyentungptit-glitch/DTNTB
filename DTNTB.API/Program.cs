@@ -44,6 +44,7 @@ builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler
 builder.Services.AddHttpClient<IAuthService, AuthService>();
 builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
+builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();
 
 // Đăng ký Typed HttpClient cho FileStorageService (tối ưu socket và pooling)
 builder.Services.AddHttpClient<IFileStorageService, RemoteFileStorageService>(client =>

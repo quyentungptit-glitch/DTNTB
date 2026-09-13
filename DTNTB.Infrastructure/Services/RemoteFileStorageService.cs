@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading;
@@ -22,20 +23,49 @@ namespace DTNTB.Infrastructure.Services
 
             _server1Url = (configuration["RemoteStorage:BaseUrl"] ?? "").TrimEnd('/');
             _apiKey = configuration["RemoteStorage:InternalApiKey"] ?? "";
+            var allowInsecureHttpForPrivateNetwork = configuration.GetValue<bool>("RemoteStorage:AllowInsecureHttpForPrivateNetwork");
 
             // FIX #3: fail-fast nếu thiếu cấu hình bắt buộc, thay vì âm thầm gọi API với giá trị rỗng
             if (string.IsNullOrWhiteSpace(_server1Url))
                 throw new InvalidOperationException("RemoteStorage:BaseUrl chưa được cấu hình.");
 
             if (!Uri.TryCreate(_server1Url, UriKind.Absolute, out var storageUri)
-                || (!storageUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-                    && !storageUri.IsLoopback))
+                || !IsAllowedStorageUri(storageUri, allowInsecureHttpForPrivateNetwork))
             {
-                throw new InvalidOperationException("RemoteStorage:BaseUrl phải dùng HTTPS, trừ địa chỉ loopback dùng cho development.");
+                throw new InvalidOperationException(
+                    "RemoteStorage:BaseUrl phải dùng HTTPS. HTTP chỉ được phép cho localhost hoặc IP private " +
+                    "khi RemoteStorage:AllowInsecureHttpForPrivateNetwork=true.");
             }
 
             if (string.IsNullOrWhiteSpace(_apiKey))
                 throw new InvalidOperationException("RemoteStorage:InternalApiKey chưa được cấu hình.");
+        }
+
+        private static bool IsAllowedStorageUri(Uri storageUri, bool allowInsecureHttpForPrivateNetwork)
+        {
+            if (storageUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!storageUri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (storageUri.IsLoopback)
+                return true;
+
+            return allowInsecureHttpForPrivateNetwork
+                && IPAddress.TryParse(storageUri.Host, out var address)
+                && IsPrivateIpv4Address(address);
+        }
+
+        private static bool IsPrivateIpv4Address(IPAddress address)
+        {
+            if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                return false;
+
+            var octets = address.GetAddressBytes();
+            return octets[0] == 10
+                || (octets[0] == 172 && octets[1] is >= 16 and <= 31)
+                || (octets[0] == 192 && octets[1] == 168);
         }
 
         public async Task<bool> SaveFileAsync(string targetRelativePath, IFormFile file, CancellationToken ct = default)
