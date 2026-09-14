@@ -83,7 +83,7 @@ namespace DTNTB.Infrastructure.Services
             request.Headers.Add("X-Internal-Key", _apiKey);
             request.Content = content;
 
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -165,7 +165,14 @@ namespace DTNTB.Infrastructure.Services
             using var request = new HttpRequestMessage(HttpMethod.Delete, url);
             request.Headers.Add("X-Internal-Key", _apiKey);
 
-            var response = await _httpClient.SendAsync(request, ct);
+            using var response = await _httpClient.SendAsync(request, ct);
+
+            // Xóa có tính idempotent: nếu tệp vật lý đã mất nhưng DB còn tham chiếu,
+            // vẫn coi là đã xóa thành công để hệ thống dọn được dữ liệu mồ côi.
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return true;
+            }
 
             if (!response.IsSuccessStatusCode)
             {
