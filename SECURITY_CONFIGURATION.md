@@ -10,8 +10,9 @@ Các khóa cấu hình bắt buộc:
 - `Jwt__Key` (ít nhất 32 byte ngẫu nhiên)
 - `Jwt__Issuer`
 - `Jwt__Audience`
-- `Sso__BaseUrl` (HTTPS ở production)
+- `Sso__BaseUrl` (HTTPS; chỉ chấp nhận HTTP tới IP private/loopback khi bật tùy chọn bên dưới)
 - `Sso__ApiKey`
+- `Sso__AllowInsecureHttpForPrivateNetwork=true` (chỉ dùng khi SSO nằm trong VLAN nội bộ đã giới hạn firewall)
 - `SystemToSystem__SecretKey`
 - `RemoteStorage__BaseUrl` (HTTPS, hoặc HTTP tới IP private/loopback khi bật tùy chọn bên dưới)
 - `RemoteStorage__AllowInsecureHttpForPrivateNetwork=true` (chỉ dùng cho VLAN nội bộ đã giới hạn firewall)

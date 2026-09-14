@@ -4,7 +4,6 @@ using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -14,6 +13,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Security.Claims;
 using System.Text;
@@ -30,7 +30,7 @@ namespace DTNTB.Infrastructure.Services
         private readonly string _ssoApiKey;
         private readonly string _ssoBaseUrl;
 
-        public AuthService(IConfiguration config, HttpClient httpClient, ILogger<AuthService> logger, IHostEnvironment environment)
+        public AuthService(IConfiguration config, HttpClient httpClient, ILogger<AuthService> logger)
         {
             _config = config;
             _httpClient = httpClient;
@@ -41,12 +41,40 @@ namespace DTNTB.Infrastructure.Services
             _ssoBaseUrl = (_config["Sso:BaseUrl"]
                 ?? throw new InvalidOperationException("Sso:BaseUrl chưa được cấu hình."))
                 .TrimEnd('/') + "/";
+            var allowInsecureHttpForPrivateNetwork = _config.GetValue<bool>("Sso:AllowInsecureHttpForPrivateNetwork");
             if (!Uri.TryCreate(_ssoBaseUrl, UriKind.Absolute, out var ssoUri)
-                || (!ssoUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-                    && !(environment.IsDevelopment() && ssoUri.IsLoopback)))
+                || !IsAllowedSsoUri(ssoUri, allowInsecureHttpForPrivateNetwork))
             {
-                throw new InvalidOperationException("Sso:BaseUrl phải dùng HTTPS trong production.");
+                throw new InvalidOperationException(
+                    "Sso:BaseUrl phải dùng HTTPS, hoặc HTTP tới IP private/loopback khi Sso:AllowInsecureHttpForPrivateNetwork=true.");
             }
+        }
+
+        private static bool IsAllowedSsoUri(Uri uri, bool allowInsecureHttpForPrivateNetwork)
+        {
+            if (uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (uri.IsLoopback)
+                return true;
+
+            return allowInsecureHttpForPrivateNetwork
+                   && IPAddress.TryParse(uri.Host, out var address)
+                   && IsPrivateIpv4Address(address);
+        }
+
+        private static bool IsPrivateIpv4Address(IPAddress address)
+        {
+            if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                return false;
+
+            var bytes = address.GetAddressBytes();
+            return bytes[0] == 10
+                   || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                   || (bytes[0] == 192 && bytes[1] == 168);
         }
 
         /// <summary>
