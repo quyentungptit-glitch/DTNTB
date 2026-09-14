@@ -169,6 +169,7 @@ namespace DTNTB.Infrastructure.Services
                     };
                 }
 
+                _logger.LogWarning("SSO từ chối xác thực với trạng thái {SsoStatus}", status);
                 return new LoginResponseDto { Status = "Error", Message = "Xác thực không thành công." };
             }
             catch (Exception ex)
