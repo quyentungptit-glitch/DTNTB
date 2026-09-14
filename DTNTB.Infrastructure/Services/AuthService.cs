@@ -381,9 +381,9 @@ namespace DTNTB.Infrastructure.Services
                 string userQuery = @"
             SELECT a.ma_nd as MaNd, a.ma_nv as MaNv, a.ten_nv as TenNv, 
                    a.donvi_id as DonViId, a.ma_dv as MaDv,
-                   b.diaban_id as DiaBanId, b.ten_diaban as TenDiaBan
+                   TO_CHAR(b.diaban_id) as DiaBanId, b.ten_diaban as TenDiaBan
             FROM v_nguoidung_diaban a 
-            LEFT JOIN v_donvi_diaban b ON SUBSTR(a.ma_dv, 1, 7) = SUBSTR(b.ma_dv, 1, 7)
+            LEFT JOIN v_donvi_diaban b ON SUBSTR(TRIM(a.ma_dv), 1, 7) = SUBSTR(TRIM(b.ma_dv), 1, 7)
             WHERE UPPER(TRIM(a.ma_nd)) = UPPER(TRIM(:Username)) AND ROWNUM = 1";
 
                 var userResult = await conn.QueryFirstOrDefaultAsync<dynamic>(userQuery, new { Username = username });
@@ -401,8 +401,10 @@ namespace DTNTB.Infrastructure.Services
                 string tenNv = userResult.TENNV?.ToString()?.Trim() ?? "";
                 string maDv = userResult.MADV?.ToString()?.Trim() ?? "";
                 string donViId = userResult.DONVIID?.ToString()?.Trim() ?? "";
-                string diaBanId = userResult.DIABAN_ID?.ToString()?.Trim() ?? "";
-                string tenDiaBan = userResult.TEN_DIABAN?.ToString()?.Trim() ?? "";
+                // Các cột phía trên được alias theo PascalCase, Dapper dynamic trả về
+                // tên alias viết hoa không có dấu gạch dưới (DIABANID/TENDIABAN).
+                string diaBanId = userResult.DIABANID?.ToString()?.Trim() ?? "";
+                string tenDiaBan = userResult.TENDIABAN?.ToString()?.Trim() ?? "";
 
                 string authQuery = @"
             SELECT r.role_code as RoleCode, r.data_scope as DataScope, rp.permission_code as PermissionCode

@@ -26,7 +26,6 @@ namespace DTNTB.API.Controllers
         }
 
         [HttpGet("donvi")]
-        [Authorize(Policy = AppPermissions.DTNTB.MANAGE_ALL)]
         public async Task<IActionResult> GetDonVi()
         {
             var list = await _dtntbService.GetDonViAsync();
@@ -86,9 +85,18 @@ namespace DTNTB.API.Controllers
         [Authorize(Policy = AppPermissions.DTNTB.ACTION)]
         public async Task<IActionResult> SaveTacNghiepUpgrade([FromForm] SaveTacNghiepFormDto model)
         {
-            var success = await _dtntbService.SaveTacNghiepUpgradeAsync(model);
-            if (!success) return BadRequest(new { message = "Ghi nhận tác nghiệp thất bại hoặc phiếu quá hạn 24h." });
-            return Ok(new { success = true, message = "Lưu kết quả tác nghiệp thành công." });
+            try
+            {
+                var success = await _dtntbService.SaveTacNghiepUpgradeAsync(model);
+                if (!success) return BadRequest(new { message = "Ghi nhận tác nghiệp thất bại, ảnh không hợp lệ hoặc phiếu đã quá SLA 72h." });
+                return Ok(new { success = true, message = "Lưu kết quả tác nghiệp thành công." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Không thể lưu tác nghiệp/ảnh của phiếu {PhieuId}", model.PhieuId);
+                return StatusCode(StatusCodes.Status502BadGateway,
+                    new { message = "Không thể kết nối máy chủ lưu ảnh. Vui lòng thử lại sau." });
+            }
         }
 
         [HttpPost("delete-image-upgrade")]

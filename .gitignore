@@ -13,6 +13,7 @@
 # Local secrets and service credentials (never commit)
 appsettings.Local.json
 firebase-service-account.json
+.dev-data-protection-keys/
 .env
 .env.*
 !.env.example

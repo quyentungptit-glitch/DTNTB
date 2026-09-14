@@ -13,11 +13,23 @@ using DTNTB.API.Security;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 if (builder.Environment.IsDevelopment())
 {
+    builder.Logging.ClearProviders();
+    builder.Logging.AddConsole();
+    builder.Logging.AddDebug();
     builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+
+    // Dùng kho khóa riêng cho Development, tránh xung đột DPAPI key do IIS/tài khoản khác tạo.
+    var developmentKeyDirectory = new DirectoryInfo(
+        Path.Combine(builder.Environment.ContentRootPath, ".dev-data-protection-keys"));
+    builder.Services
+        .AddDataProtection()
+        .SetApplicationName("DTNTB.API.Development")
+        .PersistKeysToFileSystem(developmentKeyDirectory);
 }
 
 void LoadSecretFile(string configurationKey)
@@ -84,7 +96,10 @@ builder.Services.AddHttpClient<IAuthService, AuthService>(client =>
 });
 builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
-builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();
+if (builder.Configuration.GetValue<bool>("BackgroundWorkers:FcmNotificationEnabled"))
+{
+    builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();
+}
 
 // Đăng ký Typed HttpClient cho FileStorageService (tối ưu socket và pooling)
 builder.Services.AddHttpClient<IFileStorageService, RemoteFileStorageService>(client =>
@@ -264,6 +279,7 @@ app.Use(async (context, next) =>
 // Swagger chỉ dùng khi phát triển nội bộ.
 if (app.Environment.IsDevelopment())
 {
+    app.UseDeveloperExceptionPage();
     app.UseSwagger();
     app.UseSwaggerUI();
 }

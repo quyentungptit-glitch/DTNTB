@@ -18,7 +18,9 @@ namespace DTNTB.Core.DTOs
         public string Password { get; set; } = string.Empty;
         [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.RegularExpression("^[0-9]{6}$")]
         public string Otp { get; set; } = string.Empty;
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(2048)]
+        // Execution là mã phiên opaque do SSO phát hành; có thể dài hơn 2 KB.
+        // Giới hạn 8 KB đủ cho token phiên hợp lệ nhưng vẫn chặn payload bất thường.
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(8192)]
         public string Execution { get; set; } = string.Empty;
     }
 

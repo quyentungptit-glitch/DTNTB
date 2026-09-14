@@ -88,7 +88,7 @@ namespace DTNTB.Infrastructure.Services
                     if (string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return false;
                     const string diaBanQuery = @"SELECT COUNT(1) FROM v_donvi_diaban db
                         WHERE SUBSTR(TRIM(db.ma_dv), 1, 7) = SUBSTR(TRIM(:ma_dv), 1, 7)
-                          AND TRIM(db.diaban_id) = TRIM(:diaban_id)";
+                          AND TRIM(TO_CHAR(db.diaban_id)) = :diaban_id";
                     return await conn.ExecuteScalarAsync<int>(diaBanQuery, new
                     {
                         ma_dv = normalizedMaDv,
@@ -105,7 +105,9 @@ namespace DTNTB.Infrastructure.Services
                         _currentUser.MaDv11,
                         StringComparison.OrdinalIgnoreCase);
                 case UserDataScopeLevel.NhanVien:
-                    return string.Equals(recordMaNv?.Trim(), _currentUser.MaNv, StringComparison.OrdinalIgnoreCase);
+                    // Nhân viên xem theo mã nhân viên được giao phiếu. Không ràng mã đơn vị,
+                    // vì mã đơn vị ở hồ sơ nhân sự và ở dữ liệu kế hoạch có thể khác cấp.
+                    return string.Equals(recordMaNv?.Trim(), _currentUser.MaNv?.Trim(), StringComparison.OrdinalIgnoreCase);
                 default:
                     return false;
             }
@@ -166,33 +168,112 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<List<DropdownItemDto>?> GetDonViAsync()
         {
-            if (_currentUser.ScopeLevel != UserDataScopeLevel.ToanTinh) return null;
+            const string selectColumns = @"SELECT DISTINCT TRIM(t.ma_dv) AS Value,
+                t.ten_dv || ' (' || TRIM(t.ma_dv) || ')' AS DisplayText
+                FROM brcd_dhgh_kehoach t";
+            const string activeOnly = " t.ma_dv IS NOT NULL AND t.trangthai_phieu > 0";
 
-            using (var conn = new OracleConnection(_connString))
+            string query;
+            object? parameters = null;
+            switch (_currentUser.ScopeLevel)
             {
-                string query = "SELECT DISTINCT ma_dv as Value, ten_dv || ' (' || ma_dv || ')' as DisplayText FROM brcd_dhgh_kehoach WHERE ma_dv IS NOT NULL AND trangthai_phieu > 0 ORDER BY ma_dv";
-                var list = (await conn.QueryAsync<DropdownItemDto>(query)).ToList();
-                list.Insert(0, new DropdownItemDto { Value = "ALL", DisplayText = "-- Tất cả đơn vị --" });
-                return list;
+                case UserDataScopeLevel.ToanTinh:
+                    query = $"{selectColumns} WHERE {activeOnly}";
+                    break;
+
+                case UserDataScopeLevel.DiaBan:
+                    // Trưởng địa bàn chỉ nhìn thấy các đơn vị được gán trong bảng ánh xạ địa bàn.
+                    if (string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return null;
+                    query = $@"{selectColumns} INNER JOIN v_donvi_diaban db ON SUBSTR(TRIM(t.ma_dv), 1, 7) = SUBSTR(TRIM(db.ma_dv), 1, 7)
+                        WHERE {activeOnly} AND TRIM(TO_CHAR(db.diaban_id)) = :diaban_id";
+                    parameters = new { diaban_id = _currentUser.DiaBanId };
+                    break;
+
+                case UserDataScopeLevel.DonVi:
+                    query = $"{selectColumns} WHERE {activeOnly} AND SUBSTR(TRIM(t.ma_dv), 1, 7) = :ma_dv";
+                    parameters = new { ma_dv = _currentUser.MaDv7 };
+                    break;
+
+                case UserDataScopeLevel.ToQuanLy:
+                    query = $"{selectColumns} WHERE {activeOnly} AND SUBSTR(TRIM(t.ma_dv), 1, 7) = :ma_dv";
+                    parameters = new { ma_dv = _currentUser.MaDv7 };
+                    //query = $"{selectColumns} WHERE {activeOnly} AND SUBSTR(TRIM(t.ma_dv), 1, 11) = :ma_dv";
+                    //parameters = new { ma_dv = _currentUser.MaDv11 };
+                    break;
+
+                case UserDataScopeLevel.NhanVien:
+                    // Nhân viên chọn trong các đơn vị thực sự có phiếu được giao cho mình,
+                    // không phụ thuộc mã đơn vị hiện có trên hồ sơ nhân sự.
+                    query = $"{selectColumns} WHERE {activeOnly} AND UPPER(TRIM(t.ma_nvkt)) = UPPER(TRIM(:ma_nvkt))";
+                    parameters = new { ma_nvkt = _currentUser.MaNv };
+                    break;
+
+                default:
+                    query = $"{selectColumns} WHERE {activeOnly} AND SUBSTR(TRIM(t.ma_dv), 1, 7) = :ma_dv";
+                    parameters = new { ma_dv = _currentUser.MaDv7 };
+                    //query = $"{selectColumns} WHERE {activeOnly} AND TRIM(t.ma_dv) = TRIM(:ma_dv)";
+                    //parameters = new { ma_dv = _currentUser.MaDv };
+                    break;
             }
+
+            query += " ORDER BY Value";
+            using var conn = new OracleConnection(_connString);
+            var list = (await conn.QueryAsync<DropdownItemDto>(query, parameters)).ToList();
+
+            if (_currentUser.ScopeLevel == UserDataScopeLevel.ToanTinh || _currentUser.ScopeLevel == UserDataScopeLevel.DiaBan)
+            {
+                // "ALL" vẫn an toàn vì truy vấn danh sách luôn ép phạm vi từ JWT.
+                list.Insert(0, new DropdownItemDto { Value = "ALL", DisplayText = "-- Tất cả --" });
+            }
+
+            return list;
         }
 
         public async Task<List<DropdownItemDto>?> GetNvktAsync(string maDv)
         {
+            var list = new List<DropdownItemDto>
+            {
+                new DropdownItemDto { Value = "ALL", DisplayText = "-- Tất cả nhân viên --" }
+            };
+
+            // "ALL" không mở rộng quyền: BuildDataScopeFilter vẫn ép phạm vi từ JWT.
+            if (string.Equals(maDv, "ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                return list;
+            }
+
             string filterMaDv7 = maDv.Length > 7 ? maDv.Substring(0, 7) : maDv;
             string filterMaDv11 = maDv.Length > 11 ? maDv.Substring(0, 11) : maDv;
 
             if (_currentUser.ScopeLevel == UserDataScopeLevel.DonVi && _currentUser.MaDv7 != filterMaDv7) return null;
             if (_currentUser.ScopeLevel == UserDataScopeLevel.ToQuanLy && _currentUser.MaDv11 != filterMaDv11) return null;
-            if (_currentUser.ScopeLevel == UserDataScopeLevel.NhanVien && !string.Equals(_currentUser.MaDv, maDv, StringComparison.OrdinalIgnoreCase)) return null;
+            if (_currentUser.ScopeLevel == UserDataScopeLevel.NhanVien)
+            {
+                // Chỉ chấp nhận đơn vị mà chính nhân viên này đang có phiếu được giao.
+                using var employeeScopeConn = new OracleConnection(_connString);
+                const string employeeScopeQuery = @"SELECT COUNT(1) FROM brcd_dhgh_kehoach t
+                    WHERE TRIM(t.ma_dv) = TRIM(:ma_dv)
+                      AND UPPER(TRIM(t.ma_nvkt)) = UPPER(TRIM(:ma_nvkt))
+                      AND t.trangthai_phieu > 0";
+                var hasAssignedTicket = await employeeScopeConn.ExecuteScalarAsync<int>(employeeScopeQuery, new
+                {
+                    ma_dv = maDv,
+                    ma_nvkt = _currentUser.MaNv
+                }) > 0;
+                if (!hasAssignedTicket) return null;
+
+                // Dropdown NVKT của nhân viên vẫn bị khóa; không trả danh sách nhân sự
+                // của đơn vị để tránh lộ thông tin ngoài phạm vi cần thiết.
+                return list;
+            }
 
             if (_currentUser.ScopeLevel == UserDataScopeLevel.DiaBan)
             {
-                if (maDv == "ALL" || string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return null;
+                if (string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return null;
                 using var scopeConn = new OracleConnection(_connString);
                 const string scopeQuery = @"SELECT COUNT(1) FROM v_donvi_diaban db
                     WHERE SUBSTR(TRIM(db.ma_dv), 1, 7) = SUBSTR(TRIM(:ma_dv), 1, 7)
-                      AND TRIM(db.diaban_id) = TRIM(:diaban_id)";
+                      AND TRIM(TO_CHAR(db.diaban_id)) = :diaban_id";
                 var hasAccess = await scopeConn.ExecuteScalarAsync<int>(scopeQuery, new
                 {
                     ma_dv = maDv,
@@ -200,13 +281,6 @@ namespace DTNTB.Infrastructure.Services
                 }) > 0;
                 if (!hasAccess) return null;
             }
-
-            var list = new List<DropdownItemDto>
-            {
-                new DropdownItemDto { Value = "ALL", DisplayText = "-- Tất cả nhân viên --" }
-            };
-
-            if (maDv == "ALL") return list;
 
             using (var conn = new OracleConnection(_connString))
             {
@@ -226,8 +300,8 @@ namespace DTNTB.Infrastructure.Services
             var parameters = new DynamicParameters();
             string sql = " WHERE t.trangthai_phieu > 0";
 
-            string filterMaDV = maDv ?? "";
-            string filterMaNV = maNvkt ?? "";
+            string requestedMaDv = maDv?.Trim() ?? "";
+            string requestedMaNv = maNvkt?.Trim() ?? "";
 
             switch (_currentUser.ScopeLevel)
             {
@@ -243,45 +317,47 @@ namespace DTNTB.Infrastructure.Services
                         sql += @" AND EXISTS (
                             SELECT 1 FROM v_donvi_diaban db 
                             WHERE SUBSTR(TRIM(t.ma_dv), 1, 7) = SUBSTR(TRIM(db.ma_dv), 1, 7) 
-                              AND TRIM(db.diaban_id) = TRIM(:diaban_id)
+                              AND TRIM(TO_CHAR(db.diaban_id)) = :diaban_id
                         )";
                         parameters.Add("diaban_id", _currentUser.DiaBanId, DbType.String);
                     }
                     break;
 
                 case UserDataScopeLevel.DonVi:
-                    filterMaDV = _currentUser.MaDv7 ?? "";
-                    sql += " AND SUBSTR(TRIM(t.ma_dv), 1, 7) = :ma_dv";
-                    parameters.Add("ma_dv", filterMaDV, DbType.String);
+                    sql += " AND SUBSTR(TRIM(t.ma_dv), 1, 7) = :scope_ma_dv";
+                    parameters.Add("scope_ma_dv", _currentUser.MaDv7 ?? "", DbType.String);
                     break;
 
                 case UserDataScopeLevel.ToQuanLy:
-                    filterMaDV = _currentUser.MaDv11 ?? "";
-                    sql += " AND SUBSTR(TRIM(t.ma_dv), 1, 11) = :ma_dv";
-                    parameters.Add("ma_dv", filterMaDV, DbType.String);
+                    // Tổ trưởng quản lý toàn bộ nhân viên có cùng 11 ký tự đầu của mã đơn vị.
+                    sql += " AND SUBSTR(TRIM(t.ma_dv), 1, 11) = SUBSTR(TRIM(:scope_ma_dv), 1, 11)";
+                    parameters.Add("scope_ma_dv", _currentUser.MaDv11 ?? "", DbType.String);
                     break;
 
                 case UserDataScopeLevel.NhanVien:
-                    filterMaDV = _currentUser.MaDv ?? "";
-                    filterMaNV = _currentUser.MaNv ?? "";
-                    sql += " AND TRIM(t.ma_dv) = TRIM(:ma_dv)";
-                    parameters.Add("ma_dv", filterMaDV, DbType.String);
                     sql += " AND UPPER(TRIM(t.ma_nvkt)) = UPPER(TRIM(:ma_nvkt))";
-                    parameters.Add("ma_nvkt", filterMaNV, DbType.String);
+                    parameters.Add("ma_nvkt", _currentUser.MaNv ?? "", DbType.String);
+                    if (!string.IsNullOrEmpty(requestedMaDv) && !string.Equals(requestedMaDv, "ALL", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sql += " AND TRIM(t.ma_dv) = TRIM(:selected_employee_ma_dv)";
+                        parameters.Add("selected_employee_ma_dv", requestedMaDv, DbType.String);
+                    }
                     break;
+            }
 
-                default:
-                    if (!string.IsNullOrEmpty(filterMaDV) && filterMaDV != "ALL")
-                    {
-                        sql += " AND TRIM(t.ma_dv) LIKE :ma_dv || '%'";
-                        parameters.Add("ma_dv", filterMaDV, DbType.String);
-                    }
-                    if (!string.IsNullOrEmpty(filterMaNV) && filterMaNV != "ALL")
-                    {
-                        sql += " AND UPPER(TRIM(t.ma_nvkt)) = UPPER(TRIM(:ma_nvkt))";
-                        parameters.Add("ma_nvkt", filterMaNV, DbType.String);
-                    }
-                    break;
+            // Dropdown chỉ thu hẹp dữ liệu trong phạm vi JWT; không bao giờ nới phạm vi.
+            if (_currentUser.ScopeLevel != UserDataScopeLevel.NhanVien)
+            {
+                if (!string.IsNullOrEmpty(requestedMaDv) && !string.Equals(requestedMaDv, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    sql += " AND TRIM(t.ma_dv) LIKE :selected_ma_dv || '%'";
+                    parameters.Add("selected_ma_dv", requestedMaDv, DbType.String);
+                }
+                if (!string.IsNullOrEmpty(requestedMaNv) && !string.Equals(requestedMaNv, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    sql += " AND UPPER(TRIM(t.ma_nvkt)) = UPPER(TRIM(:selected_ma_nvkt))";
+                    parameters.Add("selected_ma_nvkt", requestedMaNv, DbType.String);
+                }
             }
 
             if (nguyCo == "BINH_THUONG") sql += " AND t.diem_tin_nhiem <= 25";
