@@ -1,6 +1,7 @@
 # Dùng khi proxy ngoài đã kết thúc TLS và chuyển request HTTP nội bộ về Ubuntu.
-# Proxy ngoài phải gửi X-Forwarded-Proto: https. Nginx này giữ nguyên header đó
-# để API không redirect HTTPS sai. Các container chỉ bind localhost.
+# Frontend nhận ở cổng 80, API nhận ở cổng 8082. Proxy ngoài phải gửi
+# X-Forwarded-Proto: https; Nginx này giữ nguyên header đó để API không
+# redirect HTTPS sai. Các container chỉ bind localhost.
 
 server {
     listen 80;
@@ -16,7 +17,7 @@ server {
 }
 
 server {
-    listen 80;
+    listen 8082;
     server_name clm-api.vnptninhbinh.com.vn;
     client_max_body_size 15m;
 
