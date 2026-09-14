@@ -154,18 +154,6 @@ builder.Services.AddAuthentication(x =>
             }
             return Task.CompletedTask;
         },
-        OnTokenValidated = async context =>
-        {
-            var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthService>();
-            var isCurrent = context.Principal != null
-                && await authService.IsAuthorizationStateCurrentAsync(context.Principal);
-            if (!isCurrent)
-            {
-                var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtValidation");
-                logger.LogWarning("JWT bị từ chối do tài khoản hoặc quyền hiện tại không khớp");
-                context.Fail("Quyền hoặc phạm vi dữ liệu của token không còn hiệu lực.");
-            }
-        },
         OnAuthenticationFailed = context =>
         {
             var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtValidation");
