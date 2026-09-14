@@ -14,10 +14,12 @@ namespace DTNTB.Infrastructure.Services
     public class HeThongService : IHeThongService
     {
         private readonly string _connString;
+        private readonly ICurrentUserService _currentUser;
 
-        public HeThongService(IConfiguration config)
+        public HeThongService(IConfiguration config, ICurrentUserService currentUser)
         {
             _connString = config.GetConnectionString("ConnectionString_NBH") ?? string.Empty;
+            _currentUser = currentUser;
         }
 
         public async Task<List<RoleDto>> GetRolesAsync()
@@ -105,29 +107,29 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<bool> SaveRoleAsync(SaveRoleRequestDto request)
         {
+            var allowedScopes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "TOAN_TINH", "DIA_BAN", "DON_VI", "TO_QL", "NHAN_VIEN"
+            };
+            var normalizedScope = request.DataScope.Trim().ToUpperInvariant();
+            if (!allowedScopes.Contains(normalizedScope)) return false;
+
             using (var conn = new OracleConnection(_connString))
             {
-                string mergeQuery = @"
-                    MERGE INTO dtntb_sys_roles target
-                    USING (
-                        SELECT :role_code as role_code, :role_name as role_name, 
-                               :data_scope as data_scope, :description as description 
-                        FROM dual
-                    ) src
-                    ON (UPPER(TRIM(target.role_code)) = UPPER(TRIM(src.role_code)))
-                    WHEN MATCHED THEN
-                        UPDATE SET target.role_name = src.role_name, 
-                                   target.data_scope = src.data_scope, 
-                                   target.description = src.description
-                    WHEN NOT MATCHED THEN
-                        INSERT (role_code, role_name, data_scope, description)
-                        VALUES (src.role_code, src.role_name, src.data_scope, src.description)";
+                const string insertQuery = @"
+                    INSERT INTO dtntb_sys_roles (role_code, role_name, data_scope, description)
+                    SELECT :role_code, :role_name, :data_scope, :description
+                    FROM dual
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM dtntb_sys_roles
+                        WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))
+                    )";
 
-                var rows = await conn.ExecuteAsync(mergeQuery, new
+                var rows = await conn.ExecuteAsync(insertQuery, new
                 {
                     role_code = request.RoleCode.Trim().ToUpper(),
                     role_name = request.RoleName.Trim(),
-                    data_scope = request.DataScope.Trim().ToUpper(),
+                    data_scope = normalizedScope,
                     description = request.Description?.Trim() ?? ""
                 });
 
@@ -135,8 +137,51 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
+        public async Task<bool> UpdateRoleAsync(SaveRoleRequestDto request)
+        {
+            var allowedScopes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "TOAN_TINH", "DIA_BAN", "DON_VI", "TO_QL", "NHAN_VIEN"
+            };
+            var normalizedScope = request.DataScope.Trim().ToUpperInvariant();
+            if (!allowedScopes.Contains(normalizedScope)) return false;
+
+            using var conn = new OracleConnection(_connString);
+            const string currentScopeQuery = @"
+                SELECT data_scope FROM dtntb_sys_roles
+                WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
+            var currentScope = await conn.QueryFirstOrDefaultAsync<string>(currentScopeQuery, new
+            {
+                role_code = request.RoleCode
+            });
+            if (currentScope == null) return false;
+            if (!string.Equals(currentScope.Trim(), normalizedScope, StringComparison.OrdinalIgnoreCase)
+                && !_currentUser.HasPermission("PERMISSIONS.HETHONG.PHAN_QUYEN"))
+            {
+                return false;
+            }
+
+            const string updateQuery = @"
+                UPDATE dtntb_sys_roles
+                SET role_name = :role_name,
+                    data_scope = :data_scope,
+                    description = :description
+                WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
+            var rows = await conn.ExecuteAsync(updateQuery, new
+            {
+                role_code = request.RoleCode.Trim().ToUpperInvariant(),
+                role_name = request.RoleName.Trim(),
+                data_scope = normalizedScope,
+                description = request.Description?.Trim() ?? ""
+            });
+            return rows > 0;
+        }
+
         public async Task<bool> DeleteRoleAsync(string roleCode)
         {
+            if (string.Equals(roleCode?.Trim(), "SUPER_ADMIN", StringComparison.OrdinalIgnoreCase))
+                return false;
+
             using (var conn = new OracleConnection(_connString))
             {
                 string query = "DELETE FROM dtntb_sys_roles WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
@@ -147,6 +192,12 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<bool> UpdateRolePermissionsAsync(UpdateRolePermissionsRequestDto request)
         {
+            if (request.Permissions.Count > 100
+                || request.Permissions.Any(permission => string.IsNullOrWhiteSpace(permission) || permission.Length > 100))
+            {
+                return false;
+            }
+
             using (var conn = new OracleConnection(_connString))
             {
                 await conn.OpenAsync();
@@ -184,6 +235,8 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<PaginatedResultDto<UserRoleDto>> GetUserRolesAsync(string? search, string? roleCode, int page, int pageSize)
         {
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 100);
             using (var conn = new OracleConnection(_connString))
             {
                 string baseSql = @"

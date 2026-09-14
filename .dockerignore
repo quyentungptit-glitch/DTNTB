@@ -4,6 +4,11 @@
 **/obj
 **/appsettings.Local.json
 **/firebase-service-account.json
+.env
+.env.*
+**/*.pfx
+**/*.pem
+**/*.key
 **/*.user
 **/*.suo
 DatabaseScripts

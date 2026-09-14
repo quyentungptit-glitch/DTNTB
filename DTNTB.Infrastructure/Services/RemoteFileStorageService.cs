@@ -24,7 +24,6 @@ namespace DTNTB.Infrastructure.Services
             _server1Url = (configuration["RemoteStorage:BaseUrl"] ?? "").TrimEnd('/');
             _apiKey = configuration["RemoteStorage:InternalApiKey"] ?? "";
             var allowInsecureHttpForPrivateNetwork = configuration.GetValue<bool>("RemoteStorage:AllowInsecureHttpForPrivateNetwork");
-
             // FIX #3: fail-fast nếu thiếu cấu hình bắt buộc, thay vì âm thầm gọi API với giá trị rỗng
             if (string.IsNullOrWhiteSpace(_server1Url))
                 throw new InvalidOperationException("RemoteStorage:BaseUrl chưa được cấu hình.");

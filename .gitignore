@@ -15,6 +15,7 @@ appsettings.Local.json
 firebase-service-account.json
 .env
 .env.*
+!.env.example
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

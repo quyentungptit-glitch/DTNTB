@@ -6,14 +6,46 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 using System.IO;
+using System.Net;
 using System.Text;
 using System.Threading.RateLimiting;
 using DTNTB.API.Security;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Http.Features;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+if (builder.Environment.IsDevelopment())
+{
+    builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+}
+
+void LoadSecretFile(string configurationKey)
+{
+    var environmentVariable = configurationKey.Replace(":", "__") + "_FILE";
+    var secretPath = Environment.GetEnvironmentVariable(environmentVariable);
+    if (string.IsNullOrWhiteSpace(secretPath)) return;
+    if (!File.Exists(secretPath))
+        throw new InvalidOperationException($"Không tìm thấy secret file cho {configurationKey}.");
+
+    var value = File.ReadAllText(secretPath).TrimEnd('\r', '\n');
+    if (string.IsNullOrWhiteSpace(value))
+        throw new InvalidOperationException($"Secret file cho {configurationKey} đang rỗng.");
+    builder.Configuration[configurationKey] = value;
+}
+
+foreach (var secretKey in new[]
+{
+    "ConnectionStrings:ConnectionString_NBH",
+    "Jwt:Key",
+    "LegacyJwt:Key",
+    "Sso:ApiKey",
+    "SystemToSystem:SecretKey",
+    "RemoteStorage:InternalApiKey"
+})
+{
+    LoadSecretFile(secretKey);
+}
 
 // ==========================================
 // 1. KHỞI TẠO FIREBASE
@@ -28,7 +60,7 @@ if (System.IO.File.Exists(firebaseKeyPath))
 {
     FirebaseApp.Create(new AppOptions()
     {
-        Credential = GoogleCredential.FromFile(firebaseKeyPath)
+        Credential = CredentialFactory.FromFile<ServiceAccountCredential>(firebaseKeyPath).ToGoogleCredential()
     });
 }
 
@@ -36,12 +68,20 @@ if (System.IO.File.Exists(firebaseKeyPath))
 // 2. DEPENDENCY INJECTION & FORWARDED HEADERS
 // ==========================================
 builder.Services.AddHttpContextAccessor();
+var maxRequestSizeMb = Math.Clamp(builder.Configuration.GetValue<int?>("Upload:MaxRequestSizeInMB") ?? 15, 1, 25);
+var maxRequestSizeBytes = maxRequestSizeMb * 1024L * 1024L;
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = maxRequestSizeBytes);
+builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = maxRequestSizeBytes);
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
 builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
-builder.Services.AddHttpClient<IAuthService, AuthService>();
+builder.Services.AddHttpClient<IAuthService, AuthService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+    client.MaxResponseContentBufferSize = 1024 * 1024;
+});
 builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
 builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();
@@ -56,6 +96,16 @@ builder.Services.AddHttpClient<IFileStorageService, RemoteFileStorageService>(cl
 builder.Services.Configure<ForwardedHeadersOptions>(options => // <-- 2. THÊM MỚI
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = Math.Clamp(builder.Configuration.GetValue<int?>("ReverseProxy:ForwardLimit") ?? 1, 1, 5);
+
+    foreach (var configuredProxy in builder.Configuration.GetSection("ReverseProxy:KnownProxies").Get<string[]>() ?? Array.Empty<string>())
+    {
+        if (IPAddress.TryParse(configuredProxy, out var proxyAddress)
+            && !options.KnownProxies.Contains(proxyAddress))
+        {
+            options.KnownProxies.Add(proxyAddress);
+        }
+    }
 });
 
 // ==========================================
@@ -68,6 +118,10 @@ var jwtIssuer = builder.Configuration["Jwt:Issuer"]
 var jwtAudience = builder.Configuration["Jwt:Audience"]
     ?? throw new InvalidOperationException("Jwt:Audience chưa được cấu hình.");
 var key = Encoding.UTF8.GetBytes(jwtKey);
+if (key.Length < 32)
+{
+    throw new InvalidOperationException("Jwt:Key phải có tối thiểu 32 byte ngẫu nhiên.");
+}
 builder.Services.AddAuthentication(x =>
 {
     x.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -87,6 +141,27 @@ builder.Services.AddAuthentication(x =>
         ValidAudience = jwtAudience,
         ValidateLifetime = true,
         ClockSkew = TimeSpan.FromMinutes(1)
+    };
+    x.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            // Trình duyệt dùng cookie HttpOnly; ứng dụng di động vẫn có thể dùng Bearer token.
+            if (string.IsNullOrWhiteSpace(context.Token)
+                && context.Request.Cookies.TryGetValue("dtntb_access_token", out var cookieToken))
+            {
+                context.Token = cookieToken;
+            }
+            return Task.CompletedTask;
+        },
+        OnTokenValidated = async context =>
+        {
+            var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthService>();
+            if (context.Principal == null || !await authService.IsAuthorizationStateCurrentAsync(context.Principal))
+            {
+                context.Fail("Quyền hoặc phạm vi dữ liệu của token không còn hiệu lực.");
+            }
+        }
     };
 });
 
@@ -115,13 +190,16 @@ builder.Services.AddCors(options =>
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddFixedWindowLimiter("auth", limiterOptions =>
-    {
-        limiterOptions.PermitLimit = 5;
-        limiterOptions.Window = TimeSpan.FromMinutes(1);
-        limiterOptions.QueueLimit = 0;
-        limiterOptions.AutoReplenishment = true;
-    });
+    options.AddPolicy("auth", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
 });
 
 builder.Services.AddControllers();
@@ -157,6 +235,34 @@ var app = builder.Build();
 
 // Nhận diện IP/Domain từ Reverse Proxy (phải nằm đầu tiên)
 app.UseForwardedHeaders(); // <-- 3. ĐẶT ĐẦU TIÊN
+app.UseHttpsRedirection();
+app.UseCors("AllowAngular");
+
+// Cookie xác thực chỉ được phép thực hiện request thay đổi dữ liệu từ frontend tin cậy.
+// Bearer token của ứng dụng di động không phụ thuộc Origin và vẫn hoạt động bình thường.
+var allowedOriginSet = allowedOrigins.ToHashSet(StringComparer.OrdinalIgnoreCase);
+app.Use(async (context, next) =>
+{
+    var isUnsafeMethod = !HttpMethods.IsGet(context.Request.Method)
+        && !HttpMethods.IsHead(context.Request.Method)
+        && !HttpMethods.IsOptions(context.Request.Method)
+        && !HttpMethods.IsTrace(context.Request.Method);
+    var usesCookieAuthentication = context.Request.Cookies.ContainsKey("dtntb_access_token")
+        && !context.Request.Headers.ContainsKey("Authorization");
+
+    if (isUnsafeMethod && usesCookieAuthentication)
+    {
+        var origin = context.Request.Headers.Origin.ToString();
+        if (string.IsNullOrWhiteSpace(origin) || !allowedOriginSet.Contains(origin))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { message = "Origin không được phép." });
+            return;
+        }
+    }
+
+    await next();
+});
 
 // Swagger chỉ dùng khi phát triển nội bộ.
 if (app.Environment.IsDevelopment())
@@ -165,8 +271,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors("AllowAngular");
-app.UseHttpsRedirection();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();

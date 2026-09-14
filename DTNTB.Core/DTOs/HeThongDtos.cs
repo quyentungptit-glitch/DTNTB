@@ -33,21 +33,28 @@ namespace DTNTB.Core.DTOs
 
     public class AssignUserRoleRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
         public string MaNd { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(50)]
         public string RoleCode { get; set; } = string.Empty;
     }
 
     public class UpdateRolePermissionsRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(50)]
         public string RoleCode { get; set; } = string.Empty;
         public List<string> Permissions { get; set; } = new();
     }
 
     public class SaveRoleRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(50)]
         public string RoleCode { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(200)]
         public string RoleName { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(30)]
         public string DataScope { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.StringLength(1000)]
         public string Description { get; set; } = string.Empty;
     }
 }

@@ -57,6 +57,18 @@ namespace DTNTB.API.Controllers
             return Ok(new { success = true, message = "Lưu vai trò thành công." });
         }
 
+        [HttpPut("roles/{roleCode}")]
+        [Authorize(Policy = AppPermissions.HETHONG.UPDATE)]
+        public async Task<IActionResult> UpdateRole(string roleCode, [FromBody] SaveRoleRequestDto model)
+        {
+            if (!string.Equals(roleCode?.Trim(), model.RoleCode?.Trim(), StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { message = "Mã vai trò trên URL và nội dung không khớp." });
+
+            var success = await _heThongService.UpdateRoleAsync(model);
+            if (!success) return BadRequest(new { message = "Cập nhật vai trò thất bại." });
+            return Ok(new { success = true, message = "Cập nhật vai trò thành công." });
+        }
+
         // 5. Xóa vai trò
         [HttpDelete("roles/{roleCode}")]
         [Authorize(Policy = AppPermissions.HETHONG.DELETE)]

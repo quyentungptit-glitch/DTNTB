@@ -4,15 +4,21 @@ namespace DTNTB.Core.DTOs
 {
     public class LoginRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
         public string Username { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(256)]
         public string Password { get; set; } = string.Empty;
     }
 
     public class VerifyOtpRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
         public string Username { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(256)]
         public string Password { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.RegularExpression("^[0-9]{6}$")]
         public string Otp { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(2048)]
         public string Execution { get; set; } = string.Empty;
     }
 
@@ -44,21 +50,29 @@ namespace DTNTB.Core.DTOs
 
     public class TokenConversionRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
         public string Username { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(256)]
         public string Password { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(8192)]
         public string OldToken { get; set; } = string.Empty;
     }
 
     public class DirectLoginRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
         public string Username { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(256)]
         public string Password { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(512)]
         public string SecretKey { get; set; } = string.Empty;
     }
 
     public class RegisterFcmTokenDto
     {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(4096)]
         public string FcmToken { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.StringLength(50)]
         public string DeviceType { get; set; } = string.Empty;
     }
 }

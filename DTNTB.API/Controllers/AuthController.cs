@@ -12,10 +12,29 @@ namespace DTNTB.API.Controllers
     public class AuthController : ControllerBase
     {
         private readonly IAuthService _authService;
+        private readonly IConfiguration _configuration;
+        private readonly IWebHostEnvironment _environment;
 
-        public AuthController(IAuthService authService)
+        public AuthController(IAuthService authService, IConfiguration configuration, IWebHostEnvironment environment)
         {
             _authService = authService;
+            _configuration = configuration;
+            _environment = environment;
+        }
+
+        private void SetBrowserAuthCookie(LoginResponseDto response)
+        {
+            if (response.Status != "Success" || string.IsNullOrWhiteSpace(response.Token)) return;
+
+            var lifetimeMinutes = Math.Clamp(_configuration.GetValue<int?>("Jwt:AccessTokenMinutes") ?? 30, 5, 60);
+            Response.Cookies.Append("dtntb_access_token", response.Token, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = !_environment.IsDevelopment() || Request.IsHttps,
+                SameSite = SameSiteMode.Strict,
+                Expires = DateTimeOffset.UtcNow.AddMinutes(lifetimeMinutes),
+                Path = "/"
+            });
         }
 
         [HttpPost("login")]
@@ -33,6 +52,7 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
+            SetBrowserAuthCookie(response);
             return Ok(response);
         }
 
@@ -51,6 +71,7 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
+            SetBrowserAuthCookie(response);
             return Ok(response);
         }
 
@@ -71,6 +92,7 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
+            SetBrowserAuthCookie(response);
             return Ok(response);
         }
 
@@ -91,7 +113,22 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
+            SetBrowserAuthCookie(response);
             return Ok(response);
+        }
+
+        [Authorize]
+        [HttpPost("logout")]
+        public IActionResult Logout()
+        {
+            Response.Cookies.Delete("dtntb_access_token", new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = !_environment.IsDevelopment() || Request.IsHttps,
+                SameSite = SameSiteMode.Strict,
+                Path = "/"
+            });
+            return Ok(new { success = true });
         }
 
 

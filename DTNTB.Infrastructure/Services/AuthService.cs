@@ -4,8 +4,10 @@ using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Oracle.ManagedDataAccess.Client;
 using System;
 using System.Collections.Generic;
@@ -28,7 +30,7 @@ namespace DTNTB.Infrastructure.Services
         private readonly string _ssoApiKey;
         private readonly string _ssoBaseUrl;
 
-        public AuthService(IConfiguration config, HttpClient httpClient, ILogger<AuthService> logger)
+        public AuthService(IConfiguration config, HttpClient httpClient, ILogger<AuthService> logger, IHostEnvironment environment)
         {
             _config = config;
             _httpClient = httpClient;
@@ -39,6 +41,12 @@ namespace DTNTB.Infrastructure.Services
             _ssoBaseUrl = (_config["Sso:BaseUrl"]
                 ?? throw new InvalidOperationException("Sso:BaseUrl chưa được cấu hình."))
                 .TrimEnd('/') + "/";
+            if (!Uri.TryCreate(_ssoBaseUrl, UriKind.Absolute, out var ssoUri)
+                || (!ssoUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                    && !(environment.IsDevelopment() && ssoUri.IsLoopback)))
+            {
+                throw new InvalidOperationException("Sso:BaseUrl phải dùng HTTPS trong production.");
+            }
         }
 
         /// <summary>
@@ -103,33 +111,37 @@ namespace DTNTB.Infrastructure.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    dynamic? errorResult = JsonConvert.DeserializeObject(responseBody);
-                    return new LoginResponseDto { Status = "Error", Message = errorResult?.message?.ToString() ?? "Sai tài khoản hoặc mật khẩu." };
+                    return new LoginResponseDto { Status = "Error", Message = "Sai tài khoản hoặc mật khẩu." };
                 }
 
-                dynamic? result = JsonConvert.DeserializeObject(responseBody);
-                if (result == null || result.status == null)
+                var result = JsonConvert.DeserializeObject<JObject>(responseBody);
+                var status = result?["status"]?.ToString();
+                if (string.IsNullOrWhiteSpace(status))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Phản hồi xác thực từ SSO không hợp lệ." };
                 }
 
                 bool otpRequired = await CheckLoginWithOtpAsync(request.Username);
 
-                if (result.status == 1 && !otpRequired)
+                if (status == "1" && !otpRequired)
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
-                else if (result.status == 1)
+                else if (status == "1")
                 {
+                    var execution = result?["execution"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(execution))
+                        return new LoginResponseDto { Status = "Error", Message = "Phản hồi xác thực từ SSO không hợp lệ." };
+
                     return new LoginResponseDto
                     {
                         Status = "OtpRequired",
-                        Execution = result.execution.ToString(),
+                        Execution = execution,
                         Message = "Mã OTP đã được gửi. Vui lòng nhập OTP để tiếp tục."
                     };
                 }
 
-                return new LoginResponseDto { Status = "Error", Message = result.message?.ToString() ?? "Xác thực không thành công." };
+                return new LoginResponseDto { Status = "Error", Message = "Xác thực không thành công." };
             }
             catch (Exception ex)
             {
@@ -160,17 +172,16 @@ namespace DTNTB.Infrastructure.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    dynamic? errorResult = JsonConvert.DeserializeObject(responseBody);
-                    return new LoginResponseDto { Status = "Error", Message = errorResult?.message?.ToString() ?? "Mã OTP không đúng hoặc đã hết hạn." };
+                    return new LoginResponseDto { Status = "Error", Message = "Mã OTP không đúng hoặc đã hết hạn." };
                 }
 
-                dynamic? result = JsonConvert.DeserializeObject(responseBody);
-                if (result != null && result.status == 1)
+                var result = JsonConvert.DeserializeObject<JObject>(responseBody);
+                if (result?["status"]?.ToString() == "1")
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
 
-                return new LoginResponseDto { Status = "Error", Message = result?.message?.ToString() ?? "Mã OTP không chính xác." };
+                return new LoginResponseDto { Status = "Error", Message = "Mã OTP không chính xác." };
             }
             catch (Exception ex)
             {
@@ -197,13 +208,20 @@ namespace DTNTB.Infrastructure.Services
             try
             {
                 var tokenHandler = new JwtSecurityTokenHandler();
-                if (!tokenHandler.CanReadToken(request.OldToken))
+                var legacyKey = _config["LegacyJwt:Key"] ?? _config["Jwt:Key"]
+                    ?? throw new InvalidOperationException("LegacyJwt:Key chưa được cấu hình.");
+                var principal = tokenHandler.ValidateToken(request.OldToken, new TokenValidationParameters
                 {
-                    return new LoginResponseDto { Status = "Error", Message = "Định dạng Token cũ không hợp lệ hoặc bị lỗi." };
-                }
-
-                var jwtToken = tokenHandler.ReadJwtToken(request.OldToken);
-                var usernameClaim = jwtToken.Claims.FirstOrDefault(c =>
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(legacyKey)),
+                    ValidateIssuer = true,
+                    ValidIssuer = _config["LegacyJwt:Issuer"] ?? _config["Jwt:Issuer"],
+                    ValidateAudience = true,
+                    ValidAudience = _config["LegacyJwt:Audience"] ?? _config["Jwt:Audience"],
+                    // Token cũ có thể hết hạn, nhưng chữ ký, issuer và audience vẫn bắt buộc hợp lệ.
+                    ValidateLifetime = false
+                }, out _);
+                var usernameClaim = principal.Claims.FirstOrDefault(c =>
                     c.Type == "unique_name" ||
                     c.Type == ClaimTypes.Name ||
                     c.Type == ClaimTypes.NameIdentifier ||
@@ -234,14 +252,13 @@ namespace DTNTB.Infrastructure.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    dynamic? errorResult = JsonConvert.DeserializeObject(responseBody);
-                    return new LoginResponseDto { Status = "Error", Message = errorResult?.message?.ToString() ?? "Xác thực qua SSO thất bại." };
+                    return new LoginResponseDto { Status = "Error", Message = "Xác thực qua SSO thất bại." };
                 }
 
-                dynamic? ssoResult = JsonConvert.DeserializeObject(responseBody);
-                if (ssoResult == null || ssoResult.status == null || ssoResult.status != 1)
+                var ssoResult = JsonConvert.DeserializeObject<JObject>(responseBody);
+                if (ssoResult?["status"]?.ToString() != "1")
                 {
-                    return new LoginResponseDto { Status = "Error", Message = ssoResult?.message?.ToString() ?? "Tài khoản hoặc mật khẩu không chính xác." };
+                    return new LoginResponseDto { Status = "Error", Message = "Tài khoản hoặc mật khẩu không chính xác." };
                 }
 
                 return await BuildSuccessfulLoginResponseAsync(request.Username);
@@ -262,7 +279,10 @@ namespace DTNTB.Infrastructure.Services
             {
                 string configuredKey = _config["SystemToSystem:SecretKey"]
                     ?? throw new InvalidOperationException("SystemToSystem:SecretKey chưa được cấu hình.");
-                if (request.SecretKey != configuredKey)
+                var suppliedKeyBytes = Encoding.UTF8.GetBytes(request.SecretKey);
+                var configuredKeyBytes = Encoding.UTF8.GetBytes(configuredKey);
+                if (suppliedKeyBytes.Length != configuredKeyBytes.Length
+                    || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(suppliedKeyBytes, configuredKeyBytes))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Khóa bảo mật đi kèm không chính xác." };
                 }
@@ -284,10 +304,10 @@ namespace DTNTB.Infrastructure.Services
                     return new LoginResponseDto { Status = "Error", Message = "Xác thực qua SSO thất bại." };
                 }
 
-                dynamic? ssoResult = JsonConvert.DeserializeObject(responseBody);
-                if (ssoResult == null || ssoResult.status == null || ssoResult.status != 1)
+                var ssoResult = JsonConvert.DeserializeObject<JObject>(responseBody);
+                if (ssoResult?["status"]?.ToString() != "1")
                 {
-                    return new LoginResponseDto { Status = "Error", Message = ssoResult?.message?.ToString() ?? "Tài khoản hoặc mật khẩu không chính xác." };
+                    return new LoginResponseDto { Status = "Error", Message = "Tài khoản hoặc mật khẩu không chính xác." };
                 }
 
                 return await BuildSuccessfulLoginResponseAsync(request.Username);
@@ -396,6 +416,9 @@ namespace DTNTB.Infrastructure.Services
             var jwtKey = _config["Jwt:Key"]
                 ?? throw new InvalidOperationException("Jwt:Key chưa được cấu hình.");
             var key = Encoding.UTF8.GetBytes(jwtKey);
+            if (key.Length < 32)
+                throw new InvalidOperationException("Jwt:Key phải có tối thiểu 32 byte ngẫu nhiên.");
+            var accessTokenMinutes = Math.Clamp(_config.GetValue<int?>("Jwt:AccessTokenMinutes") ?? 30, 5, 60);
 
             var claims = new List<Claim>
             {
@@ -418,7 +441,7 @@ namespace DTNTB.Infrastructure.Services
             var tokenDescriptor = new SecurityTokenDescriptor
             {
                 Subject = new ClaimsIdentity(claims),
-                Expires = DateTime.UtcNow.AddHours(12),
+                Expires = DateTime.UtcNow.AddMinutes(accessTokenMinutes),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature),
                 Issuer = _config["Jwt:Issuer"],
                 Audience = _config["Jwt:Audience"]
@@ -426,6 +449,50 @@ namespace DTNTB.Infrastructure.Services
 
             var token = tokenHandler.CreateToken(tokenDescriptor);
             return tokenHandler.WriteToken(token);
+        }
+
+        public async Task<bool> IsAuthorizationStateCurrentAsync(ClaimsPrincipal principal)
+        {
+            var username = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value?.Trim();
+            if (string.IsNullOrWhiteSpace(username)) return false;
+
+            using var conn = new OracleConnection(_connString);
+            const string userQuery = @"
+                SELECT a.ma_nv, a.ma_dv, b.diaban_id
+                FROM v_nguoidung_diaban a
+                LEFT JOIN v_donvi_diaban b ON SUBSTR(a.ma_dv, 1, 7) = SUBSTR(b.ma_dv, 1, 7)
+                WHERE UPPER(TRIM(a.ma_nd)) = UPPER(TRIM(:username)) AND ROWNUM = 1";
+            var user = await conn.QueryFirstOrDefaultAsync<dynamic>(userQuery, new { username });
+            if (user == null) return false;
+
+            const string authorizationQuery = @"
+                SELECT r.role_code, r.data_scope, rp.permission_code
+                FROM dtntb_sys_user_roles ur
+                INNER JOIN dtntb_sys_roles r ON ur.role_code = r.role_code
+                LEFT JOIN dtntb_sys_role_permissions rp ON r.role_code = rp.role_code
+                WHERE UPPER(TRIM(ur.ma_nd)) = UPPER(TRIM(:username))";
+            var rows = (await conn.QueryAsync<dynamic>(authorizationQuery, new { username })).ToList();
+            if (rows.Count == 0) return false;
+
+            var topRole = rows.OrderBy(x => x.DATA_SCOPE == "TOAN_TINH" ? 1
+                : x.DATA_SCOPE == "DIA_BAN" ? 2
+                : x.DATA_SCOPE == "DON_VI" ? 3
+                : x.DATA_SCOPE == "TO_QL" ? 4 : 5).First();
+            var currentPermissions = rows
+                .Select(x => (string?)x.PERMISSION_CODE?.ToString())
+                .Where(permission => !string.IsNullOrWhiteSpace(permission))
+                .Select(permission => permission!)
+                .ToHashSet(StringComparer.Ordinal);
+            var tokenPermissions = principal.FindAll("permission")
+                .Select(claim => claim.Value)
+                .ToHashSet(StringComparer.Ordinal);
+
+            return string.Equals(principal.FindFirst(ClaimTypes.Role)?.Value, topRole.ROLE_CODE?.ToString(), StringComparison.Ordinal)
+                && string.Equals(principal.FindFirst("data_scope")?.Value, topRole.DATA_SCOPE?.ToString(), StringComparison.Ordinal)
+                && string.Equals(principal.FindFirst("ma_nv")?.Value, user.MA_NV?.ToString()?.Trim(), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(principal.FindFirst("ma_dv")?.Value, user.MA_DV?.ToString()?.Trim(), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(principal.FindFirst("diaban_id")?.Value ?? "", user.DIABAN_ID?.ToString()?.Trim() ?? "", StringComparison.OrdinalIgnoreCase)
+                && tokenPermissions.SetEquals(currentPermissions);
         }
 
         public async Task<bool> RegisterFcmTokenAsync(string username, RegisterFcmTokenDto request)

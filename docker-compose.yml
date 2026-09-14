@@ -10,8 +10,13 @@ services:
       ASPNETCORE_HTTP_PORTS: "8080"
       TZ: Asia/Ho_Chi_Minh
       Firebase__ServiceAccountPath: /run/secrets/firebase-service-account.json
+      ConnectionStrings__ConnectionString_NBH_FILE: /run/secrets/oracle-connection-string
+      Jwt__Key_FILE: /run/secrets/jwt-key
+      Sso__ApiKey_FILE: /run/secrets/sso-api-key
+      SystemToSystem__SecretKey_FILE: /run/secrets/system-to-system-key
+      RemoteStorage__InternalApiKey_FILE: /run/secrets/storage-internal-key
     volumes:
-      - ${FIREBASE_SERVICE_ACCOUNT_FILE}:/run/secrets/firebase-service-account.json:ro
+      - ${SECRETS_DIR:-/opt/dtntb/secrets}:/run/secrets:ro
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped

@@ -12,6 +12,10 @@ namespace DTNTB.API.Controllers
     [Route("api/[controller]")]
     public class DtntbController : ControllerBase
     {
+        private static readonly HashSet<string> AllowedRiskFilters = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ALL", "BINH_THUONG", "THEO_DOI", "NGUY_CO", "CAO", "RAT_CAO"
+        };
         private readonly IDtntbService _dtntbService;
         private readonly ILogger<DtntbController> _logger;
 
@@ -33,6 +37,9 @@ namespace DTNTB.API.Controllers
         [HttpGet("nvkt/{maDv}")]
         public async Task<IActionResult> GetNvkt(string maDv)
         {
+            if (string.IsNullOrWhiteSpace(maDv) || maDv.Length > 30)
+                return BadRequest(new { message = "Mã đơn vị không hợp lệ." });
+
             var list = await _dtntbService.GetNvktAsync(maDv);
             if (list == null) return Forbid();
             return Ok(list);
@@ -45,6 +52,9 @@ namespace DTNTB.API.Controllers
             [FromQuery] string nguyCo = "ALL", [FromQuery] string? search = null,
             [FromQuery] int page = 1, [FromQuery] int pageSize = 12)
         {
+            if (IsInvalidFilterInput(maDv, maNvkt, nguyCo, search))
+                return BadRequest(new { message = "Tham số lọc không hợp lệ." });
+
             var result = await _dtntbService.GetListAsync(maDv, maNvkt, nguyCo, search, page, pageSize);
             return Ok(result);
         }
@@ -54,6 +64,9 @@ namespace DTNTB.API.Controllers
         public async Task<IActionResult> GetRiskCount(
             [FromQuery] string? maDv, [FromQuery] string? maNvkt, [FromQuery] string? search = null)
         {
+            if (IsInvalidFilterInput(maDv, maNvkt, "ALL", search))
+                return BadRequest(new { message = "Tham số lọc không hợp lệ." });
+
             var result = await _dtntbService.GetRiskCountAsync(maDv, maNvkt, search);
             return Ok(result);
         }
@@ -62,6 +75,8 @@ namespace DTNTB.API.Controllers
         [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
         public async Task<IActionResult> GetDetail(long phieuId)
         {
+            if (phieuId <= 0) return BadRequest(new { message = "Mã phiếu không hợp lệ." });
+
             var detail = await _dtntbService.GetDetailAsync(phieuId);
             if (detail == null) return NotFound(new { message = "Không tìm thấy dữ liệu phiếu kế hoạch hoặc không có quyền." });
             return Ok(detail);
@@ -100,10 +115,21 @@ namespace DTNTB.API.Controllers
             [FromQuery] string? maDv, [FromQuery] string? maNvkt,
             [FromQuery] string nguyCo = "ALL", [FromQuery] string? search = null)
         {
+            if (IsInvalidFilterInput(maDv, maNvkt, nguyCo, search))
+                return BadRequest(new { message = "Tham số lọc không hợp lệ." });
+
             var excelBytes = await _dtntbService.ExportExcelAsync(maDv, maNvkt, nguyCo, search);
             if (excelBytes == null) return BadRequest(new { message = "Lỗi xuất file Excel hoặc không có quyền." });
 
             return File(excelBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"DanhSach_TinNhiem_ThueBao_{System.DateTime.Now:yyyyMMdd}.xlsx");
+        }
+
+        private static bool IsInvalidFilterInput(string? maDv, string? maNvkt, string nguyCo, string? search)
+        {
+            return (maDv?.Length ?? 0) > 30
+                || (maNvkt?.Length ?? 0) > 50
+                || (search?.Length ?? 0) > 100
+                || !AllowedRiskFilters.Contains(nguyCo);
         }
     }
 }

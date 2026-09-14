@@ -103,6 +103,7 @@ namespace DTNTB.Core.DTOs
 
     public class SaveTacNghiepFormDto
     {
+        [System.ComponentModel.DataAnnotations.Range(1, long.MaxValue)]
         public long PhieuId { get; set; }
         public bool DaThayThietBi { get; set; }
         public bool DaThietBiTot { get; set; }
@@ -113,23 +114,30 @@ namespace DTNTB.Core.DTOs
         public bool DaTuVanMyTV { get; set; }
         public bool DaTuVanMesh { get; set; }
         public bool DaTuVanCam { get; set; }
+        [System.ComponentModel.DataAnnotations.StringLength(2000)]
         public string? GhiChu { get; set; }
         public bool IsUnresolved { get; set; }
         public List<IFormFile>? fuAnhCSKH { get; set; }
 
         public bool DaDungCamVnpt { get; set; }
+        [System.ComponentModel.DataAnnotations.Range(0, 100)]
         public int SlCamVnpt { get; set; }
         public bool DaDungCamOther { get; set; }
+        [System.ComponentModel.DataAnnotations.Range(0, 100)]
         public int SlCamOther { get; set; }
         public bool DaDungTotoVnpt { get; set; }
+        [System.ComponentModel.DataAnnotations.Range(0, 100)]
         public int SlTotoVnpt { get; set; }
         public bool DaDungTotoOther { get; set; }
+        [System.ComponentModel.DataAnnotations.Range(0, 100)]
         public int SlTotoOther { get; set; }
     }
 
     public class DeleteImageRequestDto
     {
+        [System.ComponentModel.DataAnnotations.Range(1, long.MaxValue)]
         public long PhieuId { get; set; }
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(1000)]
         public string ImageUrl { get; set; } = string.Empty;
     }
 

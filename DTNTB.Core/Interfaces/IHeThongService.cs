@@ -10,6 +10,7 @@ namespace DTNTB.Core.Interfaces
         Task<RoleDto?> GetRoleDetailAsync(string roleCode);
         Task<List<PermissionDto>> GetAllPermissionsAsync();
         Task<bool> SaveRoleAsync(SaveRoleRequestDto request);
+        Task<bool> UpdateRoleAsync(SaveRoleRequestDto request);
         Task<bool> DeleteRoleAsync(string roleCode);
         Task<bool> UpdateRolePermissionsAsync(UpdateRolePermissionsRequestDto request);
         Task<PaginatedResultDto<UserRoleDto>> GetUserRolesAsync(string? search, string? roleCode, int page, int pageSize);
