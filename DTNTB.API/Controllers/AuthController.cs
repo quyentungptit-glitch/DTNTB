@@ -31,8 +31,20 @@ namespace DTNTB.API.Controllers
             {
                 HttpOnly = true,
                 Secure = !_environment.IsDevelopment() || Request.IsHttps,
-                SameSite = SameSiteMode.Strict,
+                // Frontend và API khác origin; HTTPS production dùng cookie cross-origin.
+                // CSRF vẫn được chặn bằng Origin middleware trong Program.cs.
+                SameSite = Request.IsHttps ? SameSiteMode.None : SameSiteMode.Lax,
                 Expires = DateTimeOffset.UtcNow.AddMinutes(lifetimeMinutes),
+                Path = "/"
+            });
+        }
+
+        private void ClearBrowserAuthCookie()
+        {
+            Response.Cookies.Delete("dtntb_access_token", new CookieOptions
+            {
+                Secure = !_environment.IsDevelopment() || Request.IsHttps,
+                SameSite = Request.IsHttps ? SameSiteMode.None : SameSiteMode.Lax,
                 Path = "/"
             });
         }
@@ -41,6 +53,8 @@ namespace DTNTB.API.Controllers
         [EnableRateLimiting("auth")]
         public async Task<IActionResult> Login([FromBody] LoginRequestDto model)
         {
+            // Không để phiên JWT cũ bị dùng lại nếu người dùng đang đăng nhập lại.
+            ClearBrowserAuthCookie();
             if (model == null || string.IsNullOrEmpty(model.Username) || string.IsNullOrEmpty(model.Password))
             {
                 return BadRequest(new { message = "Vui lòng cung cấp đầy đủ thông tin đăng nhập." });

@@ -157,10 +157,20 @@ builder.Services.AddAuthentication(x =>
         OnTokenValidated = async context =>
         {
             var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthService>();
-            if (context.Principal == null || !await authService.IsAuthorizationStateCurrentAsync(context.Principal))
+            var isCurrent = context.Principal != null
+                && await authService.IsAuthorizationStateCurrentAsync(context.Principal);
+            if (!isCurrent)
             {
+                var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtValidation");
+                logger.LogWarning("JWT bị từ chối do tài khoản hoặc quyền hiện tại không khớp");
                 context.Fail("Quyền hoặc phạm vi dữ liệu của token không còn hiệu lực.");
             }
+        },
+        OnAuthenticationFailed = context =>
+        {
+            var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("JwtValidation");
+            logger.LogWarning("JWT authentication failed: {Reason}", context.Exception.GetType().Name);
+            return Task.CompletedTask;
         }
     };
 });
@@ -233,9 +243,8 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// Nhận diện IP/Domain từ Reverse Proxy (phải nằm đầu tiên)
-app.UseForwardedHeaders(); // <-- 3. ĐẶT ĐẦU TIÊN
-app.UseHttpsRedirection();
+// TLS được kết thúc tại reverse proxy; container API chỉ nghe HTTP nội bộ.
+app.UseForwardedHeaders();
 app.UseCors("AllowAngular");
 
 // Cookie xác thực chỉ được phép thực hiện request thay đổi dữ liệu từ frontend tin cậy.
