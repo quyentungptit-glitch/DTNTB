@@ -20,7 +20,10 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /app/publish .
 
-ENV ASPNETCORE_URLS=http://+:8080
+# Thư mục này được bind mount ở production; tạo sẵn với đúng UID của user app.
+RUN mkdir -p /home/app/.aspnet/DataProtection-Keys \
+    && chown -R $APP_UID:$APP_UID /home/app/.aspnet
+
 ENV TZ=Asia/Ho_Chi_Minh
 
 USER $APP_UID
