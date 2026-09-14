@@ -1,0 +1,25 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: DTNTB.API/Dockerfile
+    env_file:
+      - ./.env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "8080"
+      TZ: Asia/Ho_Chi_Minh
+      Firebase__ServiceAccountPath: /run/secrets/firebase-service-account.json
+    volumes:
+      - ${FIREBASE_SERVICE_ACCOUNT_FILE}:/run/secrets/firebase-service-account.json:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../DTNTB-Frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8081:80"
+    restart: unless-stopped

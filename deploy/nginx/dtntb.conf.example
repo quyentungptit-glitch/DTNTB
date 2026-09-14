@@ -1,0 +1,31 @@
+# Dùng khi proxy ngoài đã kết thúc TLS và chuyển request HTTP nội bộ về Ubuntu.
+# Proxy ngoài phải gửi X-Forwarded-Proto: https. Nginx này giữ nguyên header đó
+# để API không redirect HTTPS sai. Các container chỉ bind localhost.
+
+server {
+    listen 80;
+    server_name clm.vnptninhbinh.com.vn;
+
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+}
+
+server {
+    listen 80;
+    server_name clm-api.vnptninhbinh.com.vn;
+    client_max_body_size 15m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+}
