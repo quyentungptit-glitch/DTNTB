@@ -77,6 +77,21 @@ namespace DTNTB.Infrastructure.Services
                    || (bytes[0] == 192 && bytes[1] == 168);
         }
 
+        private static bool IsSsoSuccess(JToken? statusToken)
+        {
+            if (statusToken is null) return false;
+            if (statusToken.Type == JTokenType.Boolean)
+                return statusToken.Value<bool>();
+            if (statusToken.Type == JTokenType.Integer)
+                return statusToken.Value<long>() == 1;
+
+            var value = statusToken.ToString().Trim();
+            return value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("success", StringComparison.OrdinalIgnoreCase)
+                   || value.Equals("ok", StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// Kiểm tra xem mật khẩu có nằm trong danh sách bỏ qua SSO/OTP trong appsettings.json không
         /// </summary>
@@ -143,7 +158,8 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var result = JsonConvert.DeserializeObject<JObject>(responseBody);
-                var status = result?["status"]?.ToString();
+                var statusToken = result?["status"];
+                var status = statusToken?.ToString();
                 if (string.IsNullOrWhiteSpace(status))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Phản hồi xác thực từ SSO không hợp lệ." };
@@ -151,11 +167,11 @@ namespace DTNTB.Infrastructure.Services
 
                 bool otpRequired = await CheckLoginWithOtpAsync(request.Username);
 
-                if (status == "1" && !otpRequired)
+                if (IsSsoSuccess(statusToken) && !otpRequired)
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
-                else if (status == "1")
+                else if (IsSsoSuccess(statusToken))
                 {
                     var execution = result?["execution"]?.ToString();
                     if (string.IsNullOrWhiteSpace(execution))
@@ -205,7 +221,7 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var result = JsonConvert.DeserializeObject<JObject>(responseBody);
-                if (result?["status"]?.ToString() == "1")
+                if (IsSsoSuccess(result?["status"]))
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
@@ -285,7 +301,7 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var ssoResult = JsonConvert.DeserializeObject<JObject>(responseBody);
-                if (ssoResult?["status"]?.ToString() != "1")
+                if (!IsSsoSuccess(ssoResult?["status"]))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Tài khoản hoặc mật khẩu không chính xác." };
                 }
@@ -334,7 +350,7 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var ssoResult = JsonConvert.DeserializeObject<JObject>(responseBody);
-                if (ssoResult?["status"]?.ToString() != "1")
+                if (!IsSsoSuccess(ssoResult?["status"]))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Tài khoản hoặc mật khẩu không chính xác." };
                 }
