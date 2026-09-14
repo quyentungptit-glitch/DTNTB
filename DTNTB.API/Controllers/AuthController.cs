@@ -12,49 +12,16 @@ namespace DTNTB.API.Controllers
     public class AuthController : ControllerBase
     {
         private readonly IAuthService _authService;
-        private readonly IConfiguration _configuration;
-        private readonly IWebHostEnvironment _environment;
 
-        public AuthController(IAuthService authService, IConfiguration configuration, IWebHostEnvironment environment)
+        public AuthController(IAuthService authService)
         {
             _authService = authService;
-            _configuration = configuration;
-            _environment = environment;
-        }
-
-        private void SetBrowserAuthCookie(LoginResponseDto response)
-        {
-            if (response.Status != "Success" || string.IsNullOrWhiteSpace(response.Token)) return;
-
-            var lifetimeMinutes = Math.Clamp(_configuration.GetValue<int?>("Jwt:AccessTokenMinutes") ?? 30, 5, 60);
-            Response.Cookies.Append("dtntb_access_token", response.Token, new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = !_environment.IsDevelopment() || Request.IsHttps,
-                // Frontend và API khác origin; HTTPS production dùng cookie cross-origin.
-                // CSRF vẫn được chặn bằng Origin middleware trong Program.cs.
-                SameSite = Request.IsHttps ? SameSiteMode.None : SameSiteMode.Lax,
-                Expires = DateTimeOffset.UtcNow.AddMinutes(lifetimeMinutes),
-                Path = "/"
-            });
-        }
-
-        private void ClearBrowserAuthCookie()
-        {
-            Response.Cookies.Delete("dtntb_access_token", new CookieOptions
-            {
-                Secure = !_environment.IsDevelopment() || Request.IsHttps,
-                SameSite = Request.IsHttps ? SameSiteMode.None : SameSiteMode.Lax,
-                Path = "/"
-            });
         }
 
         [HttpPost("login")]
         [EnableRateLimiting("auth")]
         public async Task<IActionResult> Login([FromBody] LoginRequestDto model)
         {
-            // Không để phiên JWT cũ bị dùng lại nếu người dùng đang đăng nhập lại.
-            ClearBrowserAuthCookie();
             if (model == null || string.IsNullOrEmpty(model.Username) || string.IsNullOrEmpty(model.Password))
             {
                 return BadRequest(new { message = "Vui lòng cung cấp đầy đủ thông tin đăng nhập." });
@@ -66,7 +33,6 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
-            SetBrowserAuthCookie(response);
             return Ok(response);
         }
 
@@ -85,7 +51,6 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
-            SetBrowserAuthCookie(response);
             return Ok(response);
         }
 
@@ -106,7 +71,6 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
-            SetBrowserAuthCookie(response);
             return Ok(response);
         }
 
@@ -127,7 +91,6 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = response.Message });
             }
 
-            SetBrowserAuthCookie(response);
             return Ok(response);
         }
 
@@ -135,13 +98,6 @@ namespace DTNTB.API.Controllers
         [HttpPost("logout")]
         public IActionResult Logout()
         {
-            Response.Cookies.Delete("dtntb_access_token", new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = !_environment.IsDevelopment() || Request.IsHttps,
-                SameSite = SameSiteMode.Strict,
-                Path = "/"
-            });
             return Ok(new { success = true });
         }
 
