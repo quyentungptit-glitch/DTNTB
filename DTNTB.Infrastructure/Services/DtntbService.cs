@@ -5,6 +5,7 @@ using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using ImageMagick;
 using Oracle.ManagedDataAccess.Client;
 using System;
@@ -30,6 +31,7 @@ namespace DTNTB.Infrastructure.Services
         private readonly string _connString;
         private readonly ICurrentUserService _currentUser;
         private readonly IFileStorageService _fileStorageService; // <-- 1. DỊCH VỤ STORAGE NỘI BỘ
+        private readonly ILogger<DtntbService> _logger;
         private readonly long _maxImageSizeBytes;
         private readonly int _maxImagesPerRequest;
         private readonly long _maxRequestImageBytes;
@@ -40,11 +42,13 @@ namespace DTNTB.Infrastructure.Services
         public DtntbService(
             IConfiguration config,
             ICurrentUserService currentUser,
-            IFileStorageService fileStorageService) // <-- 2. INJECT STORAGE SERVICE
+            IFileStorageService fileStorageService,
+            ILogger<DtntbService> logger) // <-- 2. INJECT STORAGE SERVICE
         {
             _connString = config.GetConnectionString("ConnectionString_NBH") ?? string.Empty;
             _currentUser = currentUser;
             _fileStorageService = fileStorageService;
+            _logger = logger;
             var maxImageSizeMb = int.TryParse(config["Upload:MaxFileSizeInMB"], out var configuredMaxImageSizeMb)
                 ? Math.Clamp(configuredMaxImageSizeMb, 1, 20)
                 : 10;
@@ -1129,7 +1133,9 @@ namespace DTNTB.Infrastructure.Services
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine("Lỗi xóa file trên StorageServer: " + ex.Message);
+                        // Debug.WriteLine không xuất hiện trong Docker/IIS production.
+                        // Ghi log tập trung để chẩn đoán đúng lỗi mạng, khóa nội bộ hoặc quyền Storage.
+                        _logger.LogError(ex, "Không thể xóa ảnh {ImageName} của phiếu {PhieuId} trên Storage", dbFileName, model.PhieuId);
                         remainingUrls.Add(itemUrl);
                         deletionFailed = true;
                     }

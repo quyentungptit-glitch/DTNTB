@@ -15,10 +15,12 @@ namespace DTNTB.API.Controllers
     public class MediaController : ControllerBase
     {
         private readonly IDtntbService _dtntbService;
+        private readonly ILogger<MediaController> _logger;
 
-        public MediaController(IDtntbService dtntbService)
+        public MediaController(IDtntbService dtntbService, ILogger<MediaController> logger)
         {
             _dtntbService = dtntbService;
+            _logger = logger;
         }
 
         // Angular xem ảnh qua: GET https://server2/api/media/nguycotb/2026/phieu_10/anh1.jpg
@@ -32,11 +34,20 @@ namespace DTNTB.API.Controllers
                 return BadRequest(new { message = "phieuId là bắt buộc để xem ảnh." });
             }
 
-            var fileData = await _dtntbService.GetImageAsync(phieuId, path);
-            if (fileData == null) return NotFound();
+            try
+            {
+                var fileData = await _dtntbService.GetImageAsync(phieuId, path);
+                if (fileData == null) return NotFound();
 
-            Response.Headers.Append("X-Content-Type-Options", "nosniff");
-            return File(fileData.Value.Stream, fileData.Value.ContentType);
+                Response.Headers.Append("X-Content-Type-Options", "nosniff");
+                return File(fileData.Value.Stream, fileData.Value.ContentType);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Không thể đọc ảnh {ImagePath} của phiếu {PhieuId} từ Storage", path, phieuId);
+                return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    new { message = "Máy chủ lưu ảnh hiện không phản hồi. Vui lòng thử lại sau." });
+            }
         }
 
         [HttpDelete]
