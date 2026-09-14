@@ -1,6 +1,6 @@
 # Cấu hình bí mật khi chạy DTNTB
 
-Không lưu mật khẩu, private key hoặc token trong Git. Sau khi xoay vòng các bí mật cũ, cấu hình chúng bằng secret vault, tệp secret Docker, hoặc tệp `appsettings.Local.json` (đã được `.gitignore`).
+Không lưu mật khẩu, private key hoặc token trong Git. Bản triển khai Docker hiện dùng `.env` trên Ubuntu (đã được `.gitignore`); đặt quyền `600` và không sao chép file này ra ngoài máy chủ.
 
 ## DTNTB API
 
@@ -35,6 +35,6 @@ Tạo `DTNTB.API/appsettings.Local.json` và `DTNTB.StorageServer/appsettings.Lo
 
 Sau khi triển khai cấu hình mới, kiểm tra API và Storage Server không thể khởi động nếu thiếu khóa bắt buộc; đây là hành vi an toàn mong muốn.
 
-Trên Ubuntu, sao chép `.env.example` thành `.env`, chỉ điền cấu hình không bí mật. Các file secret mặc định được mount từ `/opt/dtntb/secrets` vào `/run/secrets` ở chế độ chỉ đọc. Không đưa nội dung các file này vào `.env` hoặc Git.
+Trên Ubuntu, sao chép `.env.example` thành `.env` và điền các giá trị thực tế. Firebase service account vẫn nằm tại `/opt/dtntb/secrets/firebase-service-account.json`, được mount chỉ đọc vào container. Không đưa `.env` hoặc file Firebase vào Git.
 
 Khi dùng Storage qua HTTP nội bộ, `X-Internal-Key` và nội dung ảnh truyền dưới dạng rõ. Chỉ mở cổng Storage cho đúng IP Ubuntu/API, không NAT/public cổng này ra Internet và cần coi VLAN là vùng mạng tin cậy. API chỉ chấp nhận HTTP khi host là loopback hoặc địa chỉ IPv4 private và tùy chọn cho phép đã được bật rõ ràng.
