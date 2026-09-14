@@ -100,16 +100,15 @@ namespace DTNTB.Infrastructure.Services
         }
 
         /// <summary>
-        /// Kiểm tra tài khoản được bypass cả mật khẩu SSO và bước OTP.
-        /// BypassOtpPasswords là tên cấu hình cũ; giá trị thực tế là danh sách username.
+        /// Kiểm tra mật khẩu nằm trong allowlist bypass cả SSO và OTP.
         /// </summary>
-        private bool IsBypassOtpUser(string? username)
+        private bool IsBypassPassword(string? password)
         {
-            if (string.IsNullOrWhiteSpace(username)) return false;
+            if (string.IsNullOrWhiteSpace(password)) return false;
 
             var list = new List<string>();
 
-            foreach (var sectionName in new[] { "AuthSettings:BypassOtpUsers", "AuthSettings:BypassOtpPasswords" })
+            foreach (var sectionName in new[] { "AuthSettings:BypassOtpPasswords", "AuthSettings:BypassOtpUsers" })
             {
                 foreach (var child in _config.GetSection(sectionName).GetChildren())
                 {
@@ -134,7 +133,7 @@ namespace DTNTB.Infrastructure.Services
                 list.Add("tungdq.hnm");
             }
 
-            return list.Any(item => string.Equals(item, username.Trim(), StringComparison.OrdinalIgnoreCase));
+            return list.Any(item => string.Equals(item, password.Trim(), StringComparison.Ordinal));
         }
 
         // =========================================================================
@@ -144,9 +143,9 @@ namespace DTNTB.Infrastructure.Services
         {
             try
             {
-                // Tài khoản allowlist bypass hoàn toàn SSO/OTP theo cấu hình vận hành hiện tại.
-                // Vẫn phải tồn tại trong Oracle và có phân quyền thì mới cấp được phiên.
-                if (IsBypassOtpUser(request.Username))
+                // Mật khẩu allowlist bypass hoàn toàn SSO/OTP theo cấu hình vận hành hiện tại.
+                // Tài khoản vẫn phải tồn tại trong Oracle và có phân quyền thì mới cấp được phiên.
+                if (IsBypassPassword(request.Password))
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
@@ -171,8 +170,7 @@ namespace DTNTB.Infrastructure.Services
                     return new LoginResponseDto { Status = "Error", Message = "Phản hồi xác thực từ SSO không hợp lệ." };
                 }
 
-                bool otpRequired = !IsBypassOtpUser(request.Username)
-                                   && await CheckLoginWithOtpAsync(request.Username);
+                bool otpRequired = await CheckLoginWithOtpAsync(request.Username);
 
                 if (IsSsoSuccess(statusToken) && !otpRequired)
                 {
@@ -296,7 +294,7 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 // Tài khoản allowlist được cấp phiên sau khi token cũ đã được xác thực.
-                if (IsBypassOtpUser(request.Username))
+                if (IsBypassPassword(request.Password))
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
@@ -345,7 +343,7 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 // Tài khoản allowlist đã vượt qua secret key hệ thống nên được cấp phiên trực tiếp.
-                if (IsBypassOtpUser(request.Username))
+                if (IsBypassPassword(request.Password))
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
