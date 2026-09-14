@@ -92,60 +92,66 @@ namespace DTNTB.Infrastructure.Services
                    || value.Equals("ok", StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>
-        /// Kiểm tra xem mật khẩu có nằm trong danh sách bỏ qua SSO/OTP trong appsettings.json không
-        /// </summary>
-        private bool IsBypassPassword(string? password)
+        private static JToken? GetSsoValue(JObject? result, string name)
         {
-            if (string.IsNullOrEmpty(password)) return false;
+            return result?.Properties()
+                .FirstOrDefault(property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                ?.Value;
+        }
+
+        /// <summary>
+        /// Kiểm tra tài khoản được bypass cả mật khẩu SSO và bước OTP.
+        /// BypassOtpPasswords là tên cấu hình cũ; giá trị thực tế là danh sách username.
+        /// </summary>
+        private bool IsBypassOtpUser(string? username)
+        {
+            if (string.IsNullOrWhiteSpace(username)) return false;
 
             var list = new List<string>();
 
-            // 1. Đọc mảng JSON bằng hàm GetChildren() chuẩn sẵn có của .NET (không cần cài thêm thư viện)
-            var section = _config.GetSection("AuthSettings:BypassOtpPasswords");
-            foreach (var child in section.GetChildren())
+            foreach (var sectionName in new[] { "AuthSettings:BypassOtpUsers", "AuthSettings:BypassOtpPasswords" })
             {
-                if (!string.IsNullOrEmpty(child.Value))
+                foreach (var child in _config.GetSection(sectionName).GetChildren())
                 {
-                    list.Add(child.Value.Trim());
+                    if (!string.IsNullOrWhiteSpace(child.Value))
+                        list.Add(child.Value.Trim());
                 }
-            }
 
-            // 2. Dự phòng nếu cấu hình dạng chuỗi đơn phân tách dấu phẩy: "pass1,pass2"
-            if (!list.Any())
-            {
-                var singleString = _config["AuthSettings:BypassOtpPasswords"];
-                if (!string.IsNullOrEmpty(singleString))
+                var singleString = _config[sectionName];
+                if (!string.IsNullOrWhiteSpace(singleString))
                 {
                     list = singleString.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
                                        .Select(p => p.Trim())
                                        .ToList();
                 }
+
+                if (list.Any()) break;
             }
 
-            // Mật khẩu dự phòng mặc định nếu appsettings chưa khai báo
+            // Giữ tương thích cấu hình cũ trên môi trường chưa có .env mới.
             if (!list.Any())
             {
                 list.Add("tungdq.hnm");
             }
 
-            return list.Contains(password);
+            return list.Any(item => string.Equals(item, username.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
         // =========================================================================
-        // 1. ĐĂNG NHẬP BƯỚC 1 (ĐÃ CHẶN GỌI SSO NẾU LÀ MẬT KHẨU BYPASS)
+        // 1. ĐĂNG NHẬP BƯỚC 1 (ALLOWLIST BYPASS SSO/OTP)
         // =========================================================================
         public async Task<LoginResponseDto> LoginStep1Async(LoginRequestDto request)
         {
             try
             {
-                // ⚡ NẾU MẬT KHẨU NẰM TRONG DANH SÁCH: CẤP TOKEN LUÔN, KHÔNG GỌI SANG SSO -> KHÔNG BẮN OTP VỀ SĐT
-                if (IsBypassPassword(request.Password))
+                // Tài khoản allowlist bypass hoàn toàn SSO/OTP theo cấu hình vận hành hiện tại.
+                // Vẫn phải tồn tại trong Oracle và có phân quyền thì mới cấp được phiên.
+                if (IsBypassOtpUser(request.Username))
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
 
-                // Nếu là mật khẩu thường thì mới gọi sang SSO để xác thực và gửi OTP
+                // Các tài khoản còn lại phải xác thực mật khẩu với SSO và có thể nhận OTP.
                 var loginData = new { username = request.Username, password = request.Password, apiKey = _ssoApiKey };
                 var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
 
@@ -158,14 +164,15 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var result = JsonConvert.DeserializeObject<JObject>(responseBody);
-                var statusToken = result?["status"];
+                var statusToken = GetSsoValue(result, "status");
                 var status = statusToken?.ToString();
                 if (string.IsNullOrWhiteSpace(status))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Phản hồi xác thực từ SSO không hợp lệ." };
                 }
 
-                bool otpRequired = await CheckLoginWithOtpAsync(request.Username);
+                bool otpRequired = !IsBypassOtpUser(request.Username)
+                                   && await CheckLoginWithOtpAsync(request.Username);
 
                 if (IsSsoSuccess(statusToken) && !otpRequired)
                 {
@@ -173,7 +180,7 @@ namespace DTNTB.Infrastructure.Services
                 }
                 else if (IsSsoSuccess(statusToken))
                 {
-                    var execution = result?["execution"]?.ToString();
+                    var execution = GetSsoValue(result, "execution")?.ToString();
                     if (string.IsNullOrWhiteSpace(execution))
                         return new LoginResponseDto { Status = "Error", Message = "Phản hồi xác thực từ SSO không hợp lệ." };
 
@@ -221,10 +228,15 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var result = JsonConvert.DeserializeObject<JObject>(responseBody);
-                if (IsSsoSuccess(result?["status"]))
+                if (IsSsoSuccess(GetSsoValue(result, "status")))
                 {
-                    return await BuildSuccessfulLoginResponseAsync(request.Username);
+                    var loginResult = await BuildSuccessfulLoginResponseAsync(request.Username);
+                    if (loginResult.Status == "Error")
+                        _logger.LogWarning("OTP đúng nhưng không dựng được phiên cho tài khoản; lý do: {Reason}", loginResult.Message);
+                    return loginResult;
                 }
+
+                _logger.LogWarning("SSO từ chối OTP với trạng thái {SsoStatus}", GetSsoValue(result, "status")?.ToString());
 
                 return new LoginResponseDto { Status = "Error", Message = "Mã OTP không chính xác." };
             }
@@ -246,7 +258,7 @@ namespace DTNTB.Infrastructure.Services
         }
 
         // =========================================================================
-        // 3. CHUYỂN ĐỔI TOKEN CŨ -> MỚI (BỎ QUA SSO NẾU LÀ MẬT KHẨU BYPASS)
+        // 3. CHUYỂN ĐỔI TOKEN CŨ -> MỚI (ALLOWLIST BYPASS SSO/OTP)
         // =========================================================================
         public async Task<LoginResponseDto> ConvertTokenAsync(TokenConversionRequestDto request)
         {
@@ -283,8 +295,8 @@ namespace DTNTB.Infrastructure.Services
                     return new LoginResponseDto { Status = "Error", Message = "Bảo mật lỗi: Tên tài khoản không trùng khớp với chủ sở hữu của Token cũ!" };
                 }
 
-                // ⚡ NẾU MẬT KHẨU THUỘC DANH SÁCH BYPASS: CẤP TOKEN LUÔN, KHÔNG GỌI SANG SSO
-                if (IsBypassPassword(request.Password))
+                // Tài khoản allowlist được cấp phiên sau khi token cũ đã được xác thực.
+                if (IsBypassOtpUser(request.Username))
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
@@ -301,7 +313,7 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var ssoResult = JsonConvert.DeserializeObject<JObject>(responseBody);
-                if (!IsSsoSuccess(ssoResult?["status"]))
+                if (!IsSsoSuccess(GetSsoValue(ssoResult, "status")))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Tài khoản hoặc mật khẩu không chính xác." };
                 }
@@ -316,7 +328,7 @@ namespace DTNTB.Infrastructure.Services
         }
 
         // =========================================================================
-        // 4. ĐĂNG NHẬP TRỰC TIẾP (BỎ QUA SSO NẾU LÀ MẬT KHẨU BYPASS)
+        // 4. ĐĂNG NHẬP TRỰC TIẾP (ALLOWLIST BYPASS SSO/OTP)
         // =========================================================================
         public async Task<LoginResponseDto> DirectLoginAsync(DirectLoginRequestDto request)
         {
@@ -332,8 +344,8 @@ namespace DTNTB.Infrastructure.Services
                     return new LoginResponseDto { Status = "Error", Message = "Khóa bảo mật đi kèm không chính xác." };
                 }
 
-                // ⚡ NẾU MẬT KHẨU THUỘC DANH SÁCH BYPASS: CẤP TOKEN LUÔN, KHÔNG GỌI SANG SSO
-                if (IsBypassPassword(request.Password))
+                // Tài khoản allowlist đã vượt qua secret key hệ thống nên được cấp phiên trực tiếp.
+                if (IsBypassOtpUser(request.Username))
                 {
                     return await BuildSuccessfulLoginResponseAsync(request.Username);
                 }
@@ -350,7 +362,7 @@ namespace DTNTB.Infrastructure.Services
                 }
 
                 var ssoResult = JsonConvert.DeserializeObject<JObject>(responseBody);
-                if (!IsSsoSuccess(ssoResult?["status"]))
+                if (!IsSsoSuccess(GetSsoValue(ssoResult, "status")))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Tài khoản hoặc mật khẩu không chính xác." };
                 }
