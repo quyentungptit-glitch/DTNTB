@@ -7,6 +7,7 @@ services:
       - ./.env
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: ""
       ASPNETCORE_HTTP_PORTS: "8080"
       TZ: Asia/Ho_Chi_Minh
       Firebase__ServiceAccountPath: /run/secrets/firebase-service-account.json
