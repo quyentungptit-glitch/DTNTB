@@ -299,10 +299,16 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        private (string sqlFilter, DynamicParameters parameters) BuildDataScopeFilter(string? maDv, string? maNvkt, string nguyCo, string? search)
+        private (string sqlFilter, DynamicParameters parameters) BuildDataScopeFilter(
+            string? maDv, string? maNvkt, string nguyCo, string? search, int? trangThaiPhieu = null)
         {
             var parameters = new DynamicParameters();
             string sql = " WHERE t.trangthai_phieu > 0";
+            if (trangThaiPhieu.HasValue)
+            {
+                sql = " WHERE t.trangthai_phieu = :trang_thai_phieu";
+                parameters.Add("trang_thai_phieu", trangThaiPhieu.Value, DbType.Int32);
+            }
 
             string requestedMaDv = maDv?.Trim() ?? "";
             string requestedMaNv = maNvkt?.Trim() ?? "";
@@ -384,14 +390,14 @@ namespace DTNTB.Infrastructure.Services
         {
             page = Math.Max(1, page);
             pageSize = Math.Clamp(pageSize, 1, 100);
-            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, nguyCo, search);
+            // Chỉ bảng danh sách giới hạn các phiếu đã giao việc (trạng thái 1).
+            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, nguyCo, search, trangThaiPhieu: 1);
 
             using (var conn = new OracleConnection(_connString))
             {
                 string baseSql = $@"
                     FROM brcd_dhgh_kehoach t
                     LEFT JOIN brcd_dhgh_xuly xl ON t.phieu_id = xl.phieu_id
-                    WHERE t.trangthai_phieu=1
                     {filterClause}";
 
                 string countSql = "SELECT COUNT(1) " + baseSql;
@@ -463,8 +469,7 @@ namespace DTNTB.Infrastructure.Services
                     NVL(SUM(CASE WHEN t.diem_tin_nhiem > 28 AND t.diem_tin_nhiem <= 31 THEN 1 ELSE 0 END), 0) AS NguyCo,
                     NVL(SUM(CASE WHEN t.diem_tin_nhiem > 31 AND t.diem_tin_nhiem <= 40 THEN 1 ELSE 0 END), 0) AS Cao,
                     NVL(SUM(CASE WHEN t.diem_tin_nhiem > 40 THEN 1 ELSE 0 END), 0) AS RatCao
-                FROM brcd_dhgh_kehoach t
-                WHERE t.trangthai_phieu=1";
+                FROM brcd_dhgh_kehoach t";
 
             using var conn = new OracleConnection(_connString);
             var result = await conn.QuerySingleAsync<dynamic>(countSelect + filterClause, parameters);
