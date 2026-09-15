@@ -418,6 +418,7 @@ namespace DTNTB.Infrastructure.Services
                                        ELSE 'Rất cao'
                                    END AS MucNguyCo
                             {baseSql}
+                            WHERE t.trangthai_phieu=1
                             ORDER BY t.ngay_giao DESC
                         ) a WHERE ROWNUM <= :end_row
                     ) WHERE rnum >= :start_row";
