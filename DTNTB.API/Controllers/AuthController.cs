@@ -54,25 +54,25 @@ namespace DTNTB.API.Controllers
             return Ok(response);
         }
 
-        [HttpPost("convert-token")]
-        [EnableRateLimiting("auth")]
-        public async Task<IActionResult> ConvertToken([FromBody] TokenConversionRequestDto model)
-        {
-            if (model == null || string.IsNullOrEmpty(model.Username) ||
-                string.IsNullOrEmpty(model.Password) || string.IsNullOrEmpty(model.OldToken))
-            {
-                return BadRequest(new { message = "Vui lòng truyền đầy đủ tham số yêu cầu." });
-            }
+        //[HttpPost("convert-token")]
+        //[EnableRateLimiting("auth")]
+        //public async Task<IActionResult> ConvertToken([FromBody] TokenConversionRequestDto model)
+        //{
+        //    if (model == null || string.IsNullOrEmpty(model.Username) ||
+        //        string.IsNullOrEmpty(model.Password) || string.IsNullOrEmpty(model.OldToken))
+        //    {
+        //        return BadRequest(new { message = "Vui lòng truyền đầy đủ tham số yêu cầu." });
+        //    }
 
-            // Gọi chuyển tiếp nghiệp vụ sang lớp dịch vụ theo đúng chuẩn kiến trúc sạch
-            var response = await _authService.ConvertTokenAsync(model);
-            if (response.Status == "Error")
-            {
-                return BadRequest(new { message = response.Message });
-            }
+        //    // Gọi chuyển tiếp nghiệp vụ sang lớp dịch vụ theo đúng chuẩn kiến trúc sạch
+        //    var response = await _authService.ConvertTokenAsync(model);
+        //    if (response.Status == "Error")
+        //    {
+        //        return BadRequest(new { message = response.Message });
+        //    }
 
-            return Ok(response);
-        }
+        //    return Ok(response);
+        //}
 
         [HttpPost("direct-login")]
         [EnableRateLimiting("auth")]
@@ -126,39 +126,39 @@ namespace DTNTB.API.Controllers
 
 
         // API TEST: BẮN THỬ THÔNG BÁO PUSH LÊN TOPIC NGAY LẬP TỨC ĐỂ KIỂM TRA ĐƯỜNG TRUYỀN GOOGLE [INDEX]
-        [AllowAnonymous] // Cho phép gọi không cần đăng nhập để dễ test
-        [HttpPost("test-push-topic")]
-        public async Task<IActionResult> TestPushTopic([FromQuery] string topic, [FromQuery] int count)
-        {
-            if (string.IsNullOrEmpty(topic))
-            {
-                return BadRequest(new { message = "Vui lòng nhập tên Topic cần test." });
-            }
+        //[AllowAnonymous] // Cho phép gọi không cần đăng nhập để dễ test
+        //[HttpPost("test-push-topic")]
+        //public async Task<IActionResult> TestPushTopic([FromQuery] string topic, [FromQuery] int count)
+        //{
+        //    if (string.IsNullOrEmpty(topic))
+        //    {
+        //        return BadRequest(new { message = "Vui lòng nhập tên Topic cần test." });
+        //    }
 
-            try
-            {
-                var message = new FirebaseAdmin.Messaging.Message()
-                {
-                    Topic = topic,
-                    Notification = new FirebaseAdmin.Messaging.Notification()
-                    {
-                        Title = "🔔 TEST PUSH NOTIFICATION",
-                        Body = $"Đây là thông báo test kết nối hệ thống. Bạn đang tồn {count} phiếu!"
-                    },
-                    Data = new Dictionary<string, string>()
-                    {
-                        { "click_action", "open_default_list" }
-                    }
-                };
+        //    try
+        //    {
+        //        var message = new FirebaseAdmin.Messaging.Message()
+        //        {
+        //            Topic = topic,
+        //            Notification = new FirebaseAdmin.Messaging.Notification()
+        //            {
+        //                Title = "🔔 TEST PUSH NOTIFICATION",
+        //                Body = $"Đây là thông báo test kết nối hệ thống. Bạn đang tồn {count} phiếu!"
+        //            },
+        //            Data = new Dictionary<string, string>()
+        //            {
+        //                { "click_action", "open_default_list" }
+        //            }
+        //        };
 
-                // Thực thi bắn thử ngay lập tức lên Google Firebase [INDEX]
-                string response = await FirebaseAdmin.Messaging.FirebaseMessaging.DefaultInstance.SendAsync(message);
-                return Ok(new { success = true, response = response, message = "Đường truyền Google thông suốt. Bắn test thành công!" });
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { message = "Lỗi kết nối Firebase: " + ex.Message });
-            }
-        }
+        //        // Thực thi bắn thử ngay lập tức lên Google Firebase [INDEX]
+        //        string response = await FirebaseAdmin.Messaging.FirebaseMessaging.DefaultInstance.SendAsync(message);
+        //        return Ok(new { success = true, response = response, message = "Đường truyền Google thông suốt. Bắn test thành công!" });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        return BadRequest(new { message = "Lỗi kết nối Firebase: " + ex.Message });
+        //    }
+        //}
     }
 }
