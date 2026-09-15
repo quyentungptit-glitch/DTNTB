@@ -459,8 +459,8 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<RiskCountDto> GetRiskCountAsync(string? maDv, string? maNvkt, string? search)
         {
-            // Không áp dụng lọc nguy cơ tại đây để app luôn nhận được toàn bộ các số đếm.
-            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, "ALL", search);
+            // Badge thống kê dùng cùng tập phiếu đang hiển thị trên bảng danh sách.
+            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, "ALL", search, trangThaiPhieu: 1);
             const string countSelect = @"
                 SELECT
                     COUNT(1) AS Total,
