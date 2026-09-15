@@ -390,12 +390,15 @@ namespace DTNTB.Infrastructure.Services
         }
 
         public async Task<PaginatedResultDto<DtntbDetailDto>> GetListAsync(
-            string? maDv, string? maNvkt, string nguyCo, string? search, int page, int pageSize)
+            string? maDv, string? maNvkt, string nguyCo, string? search, int page, int pageSize, bool showAllAssigned = false)
         {
             page = Math.Max(1, page);
             pageSize = Math.Clamp(pageSize, 1, 100);
-            // Chỉ bảng danh sách giới hạn các phiếu đã giao việc (trạng thái 1).
-            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, nguyCo, search, trangThaiPhieu: 1);
+            // Mặc định chỉ lấy phiếu đang giao việc và còn hạn SLA; tùy chọn xem toàn bộ
+            // lấy mọi phiếu đã giao cho nhân viên (trạng thái > 0).
+            var (filterClause, parameters) = showAllAssigned
+                ? BuildDataScopeFilter(maDv, maNvkt, nguyCo, search)
+                : BuildDataScopeFilter(maDv, maNvkt, nguyCo, search, trangThaiPhieu: 1);
 
             using (var conn = new OracleConnection(_connString))
             {
@@ -461,10 +464,12 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        public async Task<RiskCountDto> GetRiskCountAsync(string? maDv, string? maNvkt, string? search)
+        public async Task<RiskCountDto> GetRiskCountAsync(string? maDv, string? maNvkt, string? search, bool showAllAssigned = false)
         {
             // Badge thống kê dùng cùng tập phiếu đang hiển thị trên bảng danh sách.
-            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, "ALL", search, trangThaiPhieu: 1);
+            var (filterClause, parameters) = showAllAssigned
+                ? BuildDataScopeFilter(maDv, maNvkt, "ALL", search)
+                : BuildDataScopeFilter(maDv, maNvkt, "ALL", search, trangThaiPhieu: 1);
             const string countSelect = @"
                 SELECT
                     COUNT(1) AS Total,

@@ -49,24 +49,26 @@ namespace DTNTB.API.Controllers
         public async Task<IActionResult> GetList(
             [FromQuery] string? maDv, [FromQuery] string? maNvkt,
             [FromQuery] string nguyCo = "ALL", [FromQuery] string? search = null,
-            [FromQuery] int page = 1, [FromQuery] int pageSize = 12)
+            [FromQuery] int page = 1, [FromQuery] int pageSize = 12,
+            [FromQuery] bool showAllAssigned = false)
         {
             if (IsInvalidFilterInput(maDv, maNvkt, nguyCo, search))
                 return BadRequest(new { message = "Tham số lọc không hợp lệ." });
 
-            var result = await _dtntbService.GetListAsync(maDv, maNvkt, nguyCo, search, page, pageSize);
+            var result = await _dtntbService.GetListAsync(maDv, maNvkt, nguyCo, search, page, pageSize, showAllAssigned);
             return Ok(result);
         }
 
         [HttpGet("riskCount")]
         [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
         public async Task<IActionResult> GetRiskCount(
-            [FromQuery] string? maDv, [FromQuery] string? maNvkt, [FromQuery] string? search = null)
+            [FromQuery] string? maDv, [FromQuery] string? maNvkt, [FromQuery] string? search = null,
+            [FromQuery] bool showAllAssigned = false)
         {
             if (IsInvalidFilterInput(maDv, maNvkt, "ALL", search))
                 return BadRequest(new { message = "Tham số lọc không hợp lệ." });
 
-            var result = await _dtntbService.GetRiskCountAsync(maDv, maNvkt, search);
+            var result = await _dtntbService.GetRiskCountAsync(maDv, maNvkt, search, showAllAssigned);
             return Ok(result);
         }
 
