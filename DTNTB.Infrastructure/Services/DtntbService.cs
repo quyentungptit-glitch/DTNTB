@@ -391,6 +391,7 @@ namespace DTNTB.Infrastructure.Services
                 string baseSql = $@"
                     FROM brcd_dhgh_kehoach t
                     LEFT JOIN brcd_dhgh_xuly xl ON t.phieu_id = xl.phieu_id
+                    WHERE t.trangthai_phieu=1
                     {filterClause}";
 
                 string countSql = "SELECT COUNT(1) " + baseSql;
@@ -418,7 +419,6 @@ namespace DTNTB.Infrastructure.Services
                                        ELSE 'Rất cao'
                                    END AS MucNguyCo
                             {baseSql}
-                            WHERE t.trangthai_phieu=1
                             ORDER BY t.ngay_giao DESC
                         ) a WHERE ROWNUM <= :end_row
                     ) WHERE rnum >= :start_row";
