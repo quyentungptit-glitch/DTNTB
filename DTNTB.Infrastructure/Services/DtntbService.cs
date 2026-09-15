@@ -463,7 +463,8 @@ namespace DTNTB.Infrastructure.Services
                     NVL(SUM(CASE WHEN t.diem_tin_nhiem > 28 AND t.diem_tin_nhiem <= 31 THEN 1 ELSE 0 END), 0) AS NguyCo,
                     NVL(SUM(CASE WHEN t.diem_tin_nhiem > 31 AND t.diem_tin_nhiem <= 40 THEN 1 ELSE 0 END), 0) AS Cao,
                     NVL(SUM(CASE WHEN t.diem_tin_nhiem > 40 THEN 1 ELSE 0 END), 0) AS RatCao
-                FROM brcd_dhgh_kehoach t";
+                FROM brcd_dhgh_kehoach t
+                WHERE t.trangthai_phieu=1";
 
             using var conn = new OracleConnection(_connString);
             var result = await conn.QuerySingleAsync<dynamic>(countSelect + filterClause, parameters);
