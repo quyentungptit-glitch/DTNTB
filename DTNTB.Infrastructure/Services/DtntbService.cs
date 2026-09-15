@@ -306,7 +306,7 @@ namespace DTNTB.Infrastructure.Services
             string sql = " WHERE t.trangthai_phieu > 0";
             if (trangThaiPhieu.HasValue)
             {
-                sql = " WHERE t.trangthai_phieu = :trang_thai_phieu";
+                sql = " WHERE t.trangthai_phieu = :trang_thai_phieu and sysdate - t.ngay_giao < 3";
                 parameters.Add("trang_thai_phieu", trangThaiPhieu.Value, DbType.Int32);
             }
 
@@ -339,10 +339,14 @@ namespace DTNTB.Infrastructure.Services
                     break;
 
                 case UserDataScopeLevel.ToQuanLy:
-                    // Tổ trưởng quản lý toàn bộ nhân viên có cùng 11 ký tự đầu của mã đơn vị.
-                    sql += " AND SUBSTR(TRIM(t.ma_dv), 1, 11) = SUBSTR(TRIM(:scope_ma_dv), 1, 11)";
-                    parameters.Add("scope_ma_dv", _currentUser.MaDv11 ?? "", DbType.String);
+                    //tạm thời cho xem như giám đốc đơn vị
+                    sql += " AND SUBSTR(TRIM(t.ma_dv), 1, 7) = :scope_ma_dv";
+                    parameters.Add("scope_ma_dv", _currentUser.MaDv7 ?? "", DbType.String);
                     break;
+                    // Tổ trưởng quản lý toàn bộ nhân viên có cùng 11 ký tự đầu của mã đơn vị.
+                    //sql += " AND SUBSTR(TRIM(t.ma_dv), 1, 11) = SUBSTR(TRIM(:scope_ma_dv), 1, 11)";
+                    //parameters.Add("scope_ma_dv", _currentUser.MaDv11 ?? "", DbType.String);
+                    //break;
 
                 case UserDataScopeLevel.NhanVien:
                     sql += " AND UPPER(TRIM(t.ma_nvkt)) = UPPER(TRIM(:ma_nvkt))";
