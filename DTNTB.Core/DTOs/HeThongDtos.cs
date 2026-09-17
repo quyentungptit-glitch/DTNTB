@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 
 namespace DTNTB.Core.DTOs
 {
@@ -33,28 +34,49 @@ namespace DTNTB.Core.DTOs
 
     public class AssignUserRoleRequestDto
     {
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
+        [Required, StringLength(100)]
         public string MaNd { get; set; } = string.Empty;
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(50)]
+        [Required, StringLength(50)]
         public string RoleCode { get; set; } = string.Empty;
     }
 
     public class UpdateRolePermissionsRequestDto
     {
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(50)]
+        [Required, StringLength(50)]
         public string RoleCode { get; set; } = string.Empty;
         public List<string> Permissions { get; set; } = new();
     }
 
     public class SaveRoleRequestDto
     {
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(50)]
+        [Required, StringLength(50)]
         public string RoleCode { get; set; } = string.Empty;
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(200)]
+        [Required, StringLength(200)]
         public string RoleName { get; set; } = string.Empty;
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(30)]
+        [Required, StringLength(30)]
         public string DataScope { get; set; } = string.Empty;
-        [System.ComponentModel.DataAnnotations.StringLength(1000)]
+        [StringLength(1000)]
         public string Description { get; set; } = string.Empty;
+    }
+
+    // ==========================================
+    // DTOs QUẢN LÝ MENU HỆ THỐNG & VAI TRÒ
+    // ==========================================
+    public class MenuItemDto
+    {
+        public string MenuCode { get; set; } = string.Empty;
+        public string MenuName { get; set; } = string.Empty;
+        public string MenuGroup { get; set; } = string.Empty;
+        public string RouteUrl { get; set; } = string.Empty;
+        public string Icon { get; set; } = "fa fa-circle-o";
+        public int OrderIndex { get; set; }
+        public int IsActive { get; set; } = 1;
+    }
+
+    public class UpdateRoleMenusRequestDto
+    {
+        [Required, StringLength(50)]
+        public string RoleCode { get; set; } = string.Empty;
+        public List<string> MenuCodes { get; set; } = new();
     }
 }

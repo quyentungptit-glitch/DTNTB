@@ -22,6 +22,16 @@
         }
 
         // ==========================================
+        // MODULE: DASHBOARD QUẢN TRỊ (DASHBOARD)
+        // ==========================================
+        public static class DASHBOARD
+        {
+            public const string VIEW   = "PERMISSIONS.DASHBOARD.VIEW";    // Xem báo cáo dashboard
+            public const string ACTION = "PERMISSIONS.DASHBOARD.ACTION";  // Giao phiếu / Gửi phiếu kế hoạch
+            public const string EXPORT = "PERMISSIONS.DASHBOARD.EXPORT";  // Xuất file Excel dashboard
+        }
+
+        // ==========================================
         // MODULE: QUẢN TRỊ HỆ THỐNG (HETHONG)
         // ==========================================
         public static class HETHONG

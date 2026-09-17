@@ -78,12 +78,7 @@ namespace DTNTB.Infrastructure.Services
                 string query = @"
             SELECT permission_code as PermissionCode, permission_name as PermissionName, module_group as ModuleGroup 
             FROM dtntb_sys_permissions 
-            ORDER BY 
-                CASE module_group
-                    WHEN 'DTNTB' THEN 1
-                    WHEN 'HETHONG' THEN 2
-                    ELSE 99
-                END,
+            ORDER BY CASE module_group WHEN 'HETHONG' THEN 99 ELSE 1 END, module_group,
                 CASE 
                     WHEN permission_code LIKE '%VIEW' THEN 1
                     WHEN permission_code LIKE '%ADD' THEN 2
@@ -341,6 +336,105 @@ namespace DTNTB.Infrastructure.Services
                 var rows = await conn.ExecuteAsync(query, new { ma_nd = maNd });
                 return rows > 0;
             }
+        }
+
+        // ==============================================================================
+        // QUẢN TRỊ MENU HỆ THỐNG & PHÂN MENU THEO VAI TRÒ
+        // ==============================================================================
+
+        // 1. LẤY TOÀN BỘ DANH MỤC MENU HỆ THỐNG ĐANG HOẠT ĐỘNG
+        public async Task<List<MenuItemDto>> GetSystemMenusAsync()
+        {
+            using var conn = new OracleConnection(_connString);
+            string query = @"
+                SELECT menu_code as MenuCode, 
+                       menu_name as MenuName, 
+                       menu_group as MenuGroup, 
+                       route_url as RouteUrl, 
+                       icon as Icon, 
+                       order_index as OrderIndex, 
+                       is_active as IsActive
+                FROM dtntb_sys_menus
+                WHERE is_active = 1
+                ORDER BY order_index ASC";
+
+            var list = (await conn.QueryAsync<MenuItemDto>(query)).ToList();
+            return list;
+        }
+
+        // 2. LẤY DANH SÁCH MÃ MENU ĐÃ GÁN CHO MỘT VAI TRÒ
+        public async Task<List<string>> GetRoleMenusAsync(string roleCode)
+        {
+            using var conn = new OracleConnection(_connString);
+            string query = "SELECT menu_code FROM dtntb_sys_role_menus WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
+            var list = (await conn.QueryAsync<string>(query, new { role_code = roleCode })).ToList();
+            return list;
+        }
+
+        // 3. LƯU CẤU HÌNH PHÂN MENU VÀO DATABASE (ĐƯỢC GỌI TỪ NÚT BẤM TAB 3)
+        public async Task<bool> UpdateRoleMenusAsync(UpdateRoleMenusRequestDto request)
+        {
+            if (string.IsNullOrWhiteSpace(request.RoleCode)
+                || request.MenuCodes.Count > 100
+                || request.MenuCodes.Any(code => string.IsNullOrWhiteSpace(code) || code.Length > 50))
+            {
+                return false;
+            }
+
+            using var conn = new OracleConnection(_connString);
+            await conn.OpenAsync();
+            using var trans = conn.BeginTransaction();
+            try
+            {
+                // Bước 1: Xóa các menu cũ của vai trò này
+                string deleteQuery = "DELETE FROM dtntb_sys_role_menus WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
+                await conn.ExecuteAsync(deleteQuery, new { role_code = request.RoleCode }, trans);
+
+                // Bước 2: Chèn lại danh sách menu mới được tích chọn
+                if (request.MenuCodes != null && request.MenuCodes.Any())
+                {
+                    string insertQuery = "INSERT INTO dtntb_sys_role_menus (role_code, menu_code, created_date) VALUES (:role_code, :menu_code, SYSDATE)";
+                    var insertParams = request.MenuCodes
+                        .Where(code => !string.IsNullOrWhiteSpace(code))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Select(m => new
+                        {
+                            role_code = request.RoleCode.Trim().ToUpper(),
+                            menu_code = m.Trim().ToUpper()
+                        });
+                    await conn.ExecuteAsync(insertQuery, insertParams, trans);
+                }
+
+                trans.Commit();
+                return true;
+            }
+            catch
+            {
+                trans.Rollback();
+                return false;
+            }
+        }
+
+        // 4. LẤY DANH SÁCH MENU DÀNH CHO USER THEO VAI TRÒ (HIỂN THỊ SIDEBAR MAIN LAYOUT)
+        public async Task<List<MenuItemDto>> GetUserMenusAsync(string roleCode)
+        {
+            using var conn = new OracleConnection(_connString);
+            string query = @"
+                SELECT DISTINCT m.menu_code as MenuCode, 
+                                m.menu_name as MenuName, 
+                                m.menu_group as MenuGroup, 
+                                m.route_url as RouteUrl, 
+                                m.icon as Icon, 
+                                m.order_index as OrderIndex, 
+                                m.is_active as IsActive
+                FROM dtntb_sys_menus m
+                INNER JOIN dtntb_sys_role_menus rm ON UPPER(TRIM(m.menu_code)) = UPPER(TRIM(rm.menu_code))
+                WHERE UPPER(TRIM(rm.role_code)) = UPPER(TRIM(:role_code))
+                  AND m.is_active = 1
+                ORDER BY m.order_index ASC";
+
+            var list = (await conn.QueryAsync<MenuItemDto>(query, new { role_code = roleCode })).ToList();
+            return list;
         }
     }
 }

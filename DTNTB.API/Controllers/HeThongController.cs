@@ -3,6 +3,8 @@ using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System;
+using System.Security.Claims;
 using System.Threading.Tasks;
 
 namespace DTNTB.API.Controllers
@@ -18,6 +20,10 @@ namespace DTNTB.API.Controllers
         {
             _heThongService = heThongService;
         }
+
+        // ==========================================
+        // QUẢN TRỊ VAI TRÒ & PERMISSIONS
+        // ==========================================
 
         // 1. Lấy danh mục tất cả vai trò
         [HttpGet("roles")]
@@ -47,7 +53,7 @@ namespace DTNTB.API.Controllers
             return Ok(perms);
         }
 
-        // 4. Thêm mới hoặc cập nhật vai trò
+        // 4. Thêm mới vai trò
         [HttpPost("roles")]
         [Authorize(Policy = AppPermissions.HETHONG.ADD)]
         public async Task<IActionResult> SaveRole([FromBody] SaveRoleRequestDto model)
@@ -57,6 +63,7 @@ namespace DTNTB.API.Controllers
             return Ok(new { success = true, message = "Lưu vai trò thành công." });
         }
 
+        // 4.1. Cập nhật thông tin vai trò
         [HttpPut("roles/{roleCode}")]
         [Authorize(Policy = AppPermissions.HETHONG.UPDATE)]
         public async Task<IActionResult> UpdateRole(string roleCode, [FromBody] SaveRoleRequestDto model)
@@ -118,6 +125,61 @@ namespace DTNTB.API.Controllers
             var success = await _heThongService.RemoveUserRoleAsync(maNd);
             if (!success) return BadRequest(new { message = "Thu hồi vai trò thất bại." });
             return Ok(new { success = true, message = "Thu hồi vai trò thành công." });
+        }
+
+        // ==========================================
+        // QUẢN TRỊ MENU HỆ THỐNG & PHÂN MENU THEO VAI TRÒ
+        // ==========================================
+
+        // 10. Lấy toàn bộ danh mục Menu hệ thống (dành cho hiển thị Tab 3 Phân Menu)
+        [HttpGet("menus")]
+        [Authorize(Policy = AppPermissions.HETHONG.VIEW)]
+        public async Task<IActionResult> GetSystemMenus()
+        {
+            var menus = await _heThongService.GetSystemMenusAsync();
+            return Ok(menus);
+        }
+
+        // 11. Lấy danh sách mã Menu đã gán cho 1 vai trò cụ thể
+        [HttpGet("roles/{roleCode}/menus")]
+        [Authorize(Policy = AppPermissions.HETHONG.VIEW)]
+        public async Task<IActionResult> GetRoleMenus(string roleCode)
+        {
+            var menus = await _heThongService.GetRoleMenusAsync(roleCode);
+            return Ok(menus);
+        }
+
+        // 12. Cập nhật phân quyền Menu cho vai trò (Được gọi khi bấm nút "Lưu Cấu Hình Menu" ở Tab 3)
+        [HttpPut("roles/menus")]
+        [Authorize(Policy = AppPermissions.HETHONG.PHAN_QUYEN)]
+        public async Task<IActionResult> UpdateRoleMenus([FromBody] UpdateRoleMenusRequestDto model)
+        {
+            if (string.IsNullOrWhiteSpace(model.RoleCode))
+            {
+                return BadRequest(new { message = "Mã vai trò không được để trống." });
+            }
+
+            var success = await _heThongService.UpdateRoleMenusAsync(model);
+            if (!success)
+            {
+                return BadRequest(new { message = "Cập nhật phân quyền menu cho vai trò thất bại." });
+            }
+
+            return Ok(new { success = true, message = $"Cập nhật cấu hình menu cho vai trò [{model.RoleCode}] thành công." });
+        }
+
+        // 13. Lấy danh sách menu động cho người dùng hiện tại (Hiển thị lên Sidebar MainLayout)
+        [HttpGet("user-menus")]
+        public async Task<IActionResult> GetUserMenus()
+        {
+            // Trích xuất Role của tài khoản đang đăng nhập từ JWT Claims
+            string role = User.FindFirst("role")?.Value
+                       ?? User.FindFirst(ClaimTypes.Role)?.Value
+                       ?? User.FindFirst("level_role_dtntb")?.Value
+                       ?? "NVKT";
+
+            var menus = await _heThongService.GetUserMenusAsync(role);
+            return Ok(menus);
         }
     }
 }

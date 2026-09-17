@@ -96,6 +96,7 @@ builder.Services.AddHttpClient<IAuthService, AuthService>(client =>
 });
 builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 if (builder.Configuration.GetValue<bool>("BackgroundWorkers:FcmNotificationEnabled"))
 {
     builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();
