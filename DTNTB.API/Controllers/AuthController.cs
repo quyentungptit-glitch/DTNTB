@@ -95,9 +95,23 @@ namespace DTNTB.API.Controllers
         }
 
         [Authorize]
+        [HttpGet("session")]
+        public IActionResult ValidateSession()
+        {
+            return Ok(new { authenticated = true });
+        }
+
+        [Authorize]
         [HttpPost("logout")]
         public IActionResult Logout()
         {
+            Response.Cookies.Delete("dtntb_access_token", new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                Path = "/"
+            });
             return Ok(new { success = true });
         }
 
