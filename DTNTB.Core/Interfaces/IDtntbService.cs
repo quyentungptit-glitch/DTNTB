@@ -13,7 +13,7 @@ namespace DTNTB.Core.Interfaces
         Task<DtntbDetailDto?> GetDetailAsync(long phieuId);
         Task<bool> SaveTacNghiepUpgradeAsync(SaveTacNghiepFormDto model);
         Task<bool> DeleteImageUpgradeAsync(DeleteImageRequestDto model);
-        Task<byte[]?> ExportExcelAsync(string? maDv, string? maNvkt, string nguyCo, string? search);
+        Task<byte[]?> ExportExcelAsync(string? maDv, string? maNvkt, string nguyCo, string? search, bool showAllAssigned = false);
         Task<(Stream Stream, string ContentType)?> GetImageAsync(long phieuId, string fileNameOrRelativePath);
     }
 }

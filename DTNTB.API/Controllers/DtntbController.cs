@@ -123,13 +123,21 @@ namespace DTNTB.API.Controllers
         [Authorize(Policy = AppPermissions.DTNTB.EXPORT)]
         public async Task<IActionResult> ExportExcel(
             [FromQuery] string? maDv, [FromQuery] string? maNvkt,
-            [FromQuery] string nguyCo = "ALL", [FromQuery] string? search = null)
+            [FromQuery] string nguyCo = "ALL", [FromQuery] string? search = null,
+            [FromQuery] bool showAllAssigned = false)
         {
             if (IsInvalidFilterInput(maDv, maNvkt, nguyCo, search))
                 return BadRequest(new { message = "Tham số lọc không hợp lệ." });
 
-            var excelBytes = await _dtntbService.ExportExcelAsync(maDv, maNvkt, nguyCo, search);
-            if (excelBytes == null) return BadRequest(new { message = "Lỗi xuất file Excel hoặc không có quyền." });
+            var excelBytes = await _dtntbService.ExportExcelAsync(maDv, maNvkt, nguyCo, search, showAllAssigned);
+            if (excelBytes == null)
+            {
+                _logger.LogWarning("Xuất Excel không thành công. TraceId: {TraceId}", HttpContext.TraceIdentifier);
+                return StatusCode(StatusCodes.Status500InternalServerError, new
+                {
+                    message = $"Máy chủ chưa thể tạo file Excel. Mã tra cứu: {HttpContext.TraceIdentifier}"
+                });
+            }
 
             return File(excelBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"DanhSach_TinNhiem_ThueBao_{System.DateTime.Now:yyyyMMdd}.xlsx");
         }

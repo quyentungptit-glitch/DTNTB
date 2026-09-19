@@ -1178,9 +1178,14 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        public async Task<byte[]?> ExportExcelAsync(string? maDv, string? maNvkt, string nguyCo, string? search)
+        public async Task<byte[]?> ExportExcelAsync(
+            string? maDv, string? maNvkt, string nguyCo, string? search, bool showAllAssigned = false)
         {
-            var (filterClause, parameters) = BuildDataScopeFilter(maDv, maNvkt, nguyCo, search);
+            // Luôn xuất đúng tập dữ liệu đang hiển thị trên form View. Mặc định là phiếu
+            // đang giao việc và còn SLA; chỉ khi người dùng bật "Toàn bộ phiếu" mới lấy > 0.
+            var (filterClause, parameters) = showAllAssigned
+                ? BuildDataScopeFilter(maDv, maNvkt, nguyCo, search)
+                : BuildDataScopeFilter(maDv, maNvkt, nguyCo, search, trangThaiPhieu: 1);
 
             using (var conn = new OracleConnection(_connString))
             {
@@ -1241,25 +1246,34 @@ namespace DTNTB.Infrastructure.Services
                             else if (trangThaiPhieuVal == 2) trangThaiPhieuText = "Đã xử lý TC";
                             else if (trangThaiPhieuVal == 3) trangThaiPhieuText = "Chưa xử lý được";
 
-                            worksheet.Cell(row, 1).Value = item.MATB?.ToString();
-                            worksheet.Cell(row, 2).Value = item.TENTB?.ToString();
-                            worksheet.Cell(row, 3).Value = item.SODT?.ToString();
-                            worksheet.Cell(row, 4).Value = item.DIACHITB?.ToString();
-                            worksheet.Cell(row, 5).Value = item.MADV?.ToString();
-                            worksheet.Cell(row, 6).Value = item.TENNVKT?.ToString();
+                            // Oracle có thể chứa ký tự điều khiển trong tên/địa chỉ/ghi chú.
+                            // Các ký tự này không hợp lệ trong XML của xlsx và sẽ làm ClosedXML
+                            // lỗi theo từng bản ghi, nên phải chuẩn hóa trước khi ghi cell.
+                            worksheet.Cell(row, 1).Value = ToExcelSafeText(item.MATB);
+                            worksheet.Cell(row, 2).Value = ToExcelSafeText(item.TENTB);
+                            worksheet.Cell(row, 3).Value = ToExcelSafeText(item.SODT);
+                            worksheet.Cell(row, 4).Value = ToExcelSafeText(item.DIACHITB);
+                            worksheet.Cell(row, 5).Value = ToExcelSafeText(item.MADV);
+                            worksheet.Cell(row, 6).Value = ToExcelSafeText(item.TENNVKT);
                             worksheet.Cell(row, 7).Value = item.NGAYGIAO != null ? Convert.ToDateTime(item.NGAYGIAO).ToString("dd/MM/yyyy HH:mm") : "-";
                             worksheet.Cell(row, 8).Value = trangThaiPhieuText;
                             worksheet.Cell(row, 9).Value = trangThaiText;
                             worksheet.Cell(row, 10).Value = item.NGAYTAOLS != null ? Convert.ToDateTime(item.NGAYTAOLS).ToString("dd/MM/yyyy HH:mm") : "-";
                             worksheet.Cell(row, 11).Value = daTacNghiep == 1 ? goc.ToString() : "-";
                             worksheet.Cell(row, 12).Value = daTacNghiep == 1 ? sau.ToString() : "-";
-                            worksheet.Cell(row, 13).Value = item.DIEMTINNHIEM?.ToString();
+                            worksheet.Cell(row, 13).Value = ToExcelSafeText(item.DIEMTINNHIEM);
 
                             row++;
                         }
 
-                        worksheet.Columns().AdjustToContents();
+                        // Auto-fit toàn bộ ô rất tốn CPU/RAM với danh sách lớn và là nguyên
+                        // nhân khiến tiến trình Docker dễ timeout. Đặt độ rộng cố định, dễ đọc.
+                        var columnWidths = new[] { 18d, 24d, 15d, 38d, 14d, 24d, 20d, 18d, 20d, 22d, 16d, 20d, 15d };
+                        for (var column = 1; column <= columnWidths.Length; column++)
+                            worksheet.Column(column).Width = columnWidths[column - 1];
+                        worksheet.Columns(1, 13).Style.Alignment.WrapText = true;
 
+                        _logger.LogInformation("Đang hoàn tất file Excel danh sách thuê bao với {RowCount} bản ghi.", list.Count);
                         using (var stream = new MemoryStream())
                         {
                             workbook.SaveAs(stream);
@@ -1269,7 +1283,9 @@ namespace DTNTB.Infrastructure.Services
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine("Lỗi xuất Excel: " + ex.Message);
+                    _logger.LogError(ex,
+                        "Không thể xuất Excel danh sách thuê bao. MaDv: {MaDv}, MaNvkt: {MaNvkt}, NguyCo: {NguyCo}, ShowAllAssigned: {ShowAllAssigned}",
+                        maDv, maNvkt, nguyCo, showAllAssigned);
                     return null;
                 }
             }
@@ -1283,6 +1299,14 @@ namespace DTNTB.Infrastructure.Services
             const string query = "SELECT anh_cskh FROM brcd_dhgh_xuly WHERE phieu_id = :phieu_id";
             var result = await conn.QueryFirstOrDefaultAsync<dynamic>(query, new { phieu_id = phieuId });
             return result?.ANH_CSKH?.ToString()?.Trim() ?? "";
+        }
+
+        private static string ToExcelSafeText(object? value)
+        {
+            var text = value?.ToString() ?? string.Empty;
+            return new string(text
+                .Where(character => character is '\t' or '\r' or '\n' || !char.IsControl(character))
+                .ToArray());
         }
 
         public async Task<(Stream Stream, string ContentType)?> GetImageAsync(long phieuId, string fileNameOrRelativePath)
