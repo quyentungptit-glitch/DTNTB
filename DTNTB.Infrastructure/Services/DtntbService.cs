@@ -253,21 +253,14 @@ namespace DTNTB.Infrastructure.Services
             if (_currentUser.ScopeLevel == UserDataScopeLevel.ToQuanLy && _currentUser.MaDv11 != filterMaDv11) return null;
             if (_currentUser.ScopeLevel == UserDataScopeLevel.NhanVien)
             {
-                // Chỉ chấp nhận đơn vị mà chính nhân viên này đang có phiếu được giao.
-                using var employeeScopeConn = new OracleConnection(_connString);
-                const string employeeScopeQuery = @"SELECT COUNT(1) FROM brcd_dhgh_kehoach t
-                    WHERE TRIM(t.ma_dv) = TRIM(:ma_dv)
-                      AND UPPER(TRIM(t.ma_nvkt)) = UPPER(TRIM(:ma_nvkt))
-                      AND t.trangthai_phieu > 0";
-                var hasAssignedTicket = await employeeScopeConn.ExecuteScalarAsync<int>(employeeScopeQuery, new
+                // Nhân viên luôn có thể mở và chọn dropdown, nhưng chỉ nhận đúng bản thân.
+                // Không phụ thuộc việc đã được giao phiếu và không lộ nhân sự khác.
+                list.Clear();
+                list.Add(new DropdownItemDto
                 {
-                    ma_dv = maDv,
-                    ma_nvkt = _currentUser.MaNv
-                }) > 0;
-                if (!hasAssignedTicket) return null;
-
-                // Dropdown NVKT của nhân viên vẫn bị khóa; không trả danh sách nhân sự
-                // của đơn vị để tránh lộ thông tin ngoài phạm vi cần thiết.
+                    Value = _currentUser.MaNv ?? string.Empty,
+                    DisplayText = $"{_currentUser.TenNv ?? "Nhân viên"} ({_currentUser.MaNv ?? ""})"
+                });
                 return list;
             }
 

@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using ClosedXML.Excel;
+using DTNTB.Core.Constants;
 using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -28,15 +29,42 @@ namespace DTNTB.Infrastructure.Services
 
         private OracleConnection CreateConnection() => new OracleConnection(_connectionString);
 
-        public async Task<DashboardKpiDto> GetKpisAndChartsAsync(string? maDv, bool isSuperAdmin)
+        private static string BuildScopeFilter(UserDataScopeLevel scope, string? maDv, string? diaBanId, string unitColumn)
+        {
+            return scope switch
+            {
+                UserDataScopeLevel.ToanTinh => string.Empty,
+                UserDataScopeLevel.DiaBan when !string.IsNullOrWhiteSpace(diaBanId) => $@"
+                    AND EXISTS (
+                        SELECT 1 FROM v_donvi_diaban db
+                        WHERE SUBSTR(TRIM(db.ma_dv), 1, 7) = SUBSTR(TRIM({unitColumn}), 1, 7)
+                          AND TRIM(TO_CHAR(db.diaban_id)) = :diaban_id
+                    )",
+                UserDataScopeLevel.DonVi or UserDataScopeLevel.ToQuanLy
+                    when !string.IsNullOrWhiteSpace(maDv) =>
+                    $" AND SUBSTR(TRIM({unitColumn}), 1, 7) = :ma_dv ",
+                _ => " AND 1 = 0 " // Fail closed nếu token thiếu scope / mã phạm vi.
+            };
+        }
+
+        private static void AddScopeParameters(
+            OracleCommand command, UserDataScopeLevel scope, string? maDv, string? diaBanId)
+        {
+            if (scope == UserDataScopeLevel.DiaBan)
+            {
+                command.Parameters.Add("diaban_id", OracleDbType.Varchar2).Value = diaBanId?.Trim() ?? string.Empty;
+            }
+            else if (scope is UserDataScopeLevel.DonVi or UserDataScopeLevel.ToQuanLy)
+            {
+                var maDv7 = (maDv?.Length > 7 ? maDv.Substring(0, 7) : maDv)?.Trim() ?? string.Empty;
+                command.Parameters.Add("ma_dv", OracleDbType.Varchar2).Value = maDv7;
+            }
+        }
+
+        public async Task<DashboardKpiDto> GetKpisAndChartsAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId)
         {
             var result = new DashboardKpiDto();
-            string userMaDv = (maDv?.Length > 7 ? maDv.Substring(0, 7) : maDv)?.Trim() ?? string.Empty;
-
-            // CHỈ áp dụng bộ lọc đơn vị khi KHÔNG phải Quản trị viên toàn tỉnh VÀ có mã đơn vị cụ thể
-            string unitFilter = (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                ? " AND TRIM(t.ma_dv) = TRIM(:ma_dv) "
-                : "";
+            string unitFilter = BuildScopeFilter(scope, maDv, diaBanId, "t.ma_dv");
 
             using var conn = CreateConnection();
             await conn.OpenAsync();
@@ -70,10 +98,7 @@ namespace DTNTB.Infrastructure.Services
             using (var cmd = new OracleCommand(sqlSummary, conn))
             {
                 cmd.BindByName = true;
-                if (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                {
-                    cmd.Parameters.Add("ma_dv", OracleDbType.Varchar2).Value = userMaDv;
-                }
+                AddScopeParameters(cmd, scope, maDv, diaBanId);
 
                 using var reader = await cmd.ExecuteReaderAsync();
                 if (await reader.ReadAsync())
@@ -105,10 +130,7 @@ namespace DTNTB.Infrastructure.Services
             using (var cmdBar = new OracleCommand(sqlUnits, conn))
             {
                 cmdBar.BindByName = true;
-                if (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                {
-                    cmdBar.Parameters.Add("ma_dv", OracleDbType.Varchar2).Value = userMaDv;
-                }
+                AddScopeParameters(cmdBar, scope, maDv, diaBanId);
 
                 using var reader = await cmdBar.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
@@ -121,17 +143,16 @@ namespace DTNTB.Infrastructure.Services
                 }
             }
 
-            // 3. ĐẾM SỐ PHIẾU KẾ HOẠCH HÔM NAY (THẺ 2)
-            string sqlPhieu = "SELECT COUNT(1) FROM brcd_dhgh_kehoach WHERE TRUNC(ngay_lap_kh) = TRUNC(SYSDATE)"
-                            + (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv) ? " AND TRIM(ma_dv) = TRIM(:ma_dv)" : "");
+            // 3. Đếm cùng tập dữ liệu với modal: chỉ nguy cơ cao và rất cao (>= 32 điểm).
+            // Phải truyền k.ma_dv giống Form View. "ma_dv" không có alias ở đây
+            // sẽ bị Oracle hiểu nhầm là db.ma_dv trong EXISTS v_donvi_diaban.
+            string sqlPhieu = "SELECT COUNT(1) FROM brcd_dhgh_kehoach k WHERE TRUNC(k.ngay_lap_kh) = TRUNC(SYSDATE) AND NVL(k.diem_tin_nhiem, 0) >= 32"
+                            + BuildScopeFilter(scope, maDv, diaBanId, "k.ma_dv");
 
             using (var cmdPhieu = new OracleCommand(sqlPhieu, conn))
             {
                 cmdPhieu.BindByName = true;
-                if (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                {
-                    cmdPhieu.Parameters.Add("ma_dv", OracleDbType.Varchar2).Value = userMaDv;
-                }
+                AddScopeParameters(cmdPhieu, scope, maDv, diaBanId);
 
                 var count = await cmdPhieu.ExecuteScalarAsync();
                 result.TongPhieuHomNay = count != null && count != DBNull.Value ? Convert.ToInt32(count) : 0;
@@ -140,13 +161,10 @@ namespace DTNTB.Infrastructure.Services
             return result;
         }
 
-        public async Task<List<RecentActivityDto>> GetRecentActivitiesAsync(string? maDv, bool isSuperAdmin)
+        public async Task<List<RecentActivityDto>> GetRecentActivitiesAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId)
         {
             var list = new List<RecentActivityDto>();
-            string userMaDv = (maDv?.Length > 7 ? maDv.Substring(0, 7) : maDv)?.Trim() ?? string.Empty;
-            string unitFilter = (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                ? " AND TRIM(xl.ma_dv) = TRIM(:ma_dv) "
-                : "";
+            string unitFilter = BuildScopeFilter(scope, maDv, diaBanId, "xl.ma_dv");
 
             using var conn = CreateConnection();
             await conn.OpenAsync();
@@ -168,10 +186,7 @@ namespace DTNTB.Infrastructure.Services
 
             using var cmd = new OracleCommand(sqlRecent, conn);
             cmd.BindByName = true;
-            if (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-            {
-                cmd.Parameters.Add("ma_dv", OracleDbType.Varchar2).Value = userMaDv;
-            }
+            AddScopeParameters(cmd, scope, maDv, diaBanId);
 
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -199,13 +214,10 @@ namespace DTNTB.Infrastructure.Services
             return list;
         }
 
-        public async Task<List<KeHoachItemDto>> GetHighRiskPlansTodayAsync(string? maDv, bool isSuperAdmin)
+        public async Task<List<KeHoachItemDto>> GetHighRiskPlansTodayAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId)
         {
             var list = new List<KeHoachItemDto>();
-            string userMaDv = (maDv?.Length > 7 ? maDv.Substring(0, 7) : maDv)?.Trim() ?? string.Empty;
-            string filter = (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                ? " AND TRIM(ma_dv) = TRIM(:ma_dv) "
-                : "";
+            string filter = BuildScopeFilter(scope, maDv, diaBanId, "k.ma_dv");
 
             using var conn = CreateConnection();
             await conn.OpenAsync();
@@ -217,16 +229,14 @@ namespace DTNTB.Infrastructure.Services
                        NVL(diem_tttt, 0) AS diem_tttt, NVL(diem_dadv, 0) AS diem_dadv, NVL(diem_bhll, 0) AS diem_bhll,
                        NVL(diem_kohl, 0) AS diem_kohl, NVL(diem_tgsc, 0) AS diem_tgsc, NVL(diem_tgsd, 0) AS diem_tgsd,
                        NVL(diem_tin_nhiem, 0) AS diem_tin_nhiem, ghi_chu_giao
-                FROM brcd_dhgh_kehoach
-                WHERE TRUNC(ngay_lap_kh) = TRUNC(SYSDATE) {filter}
+                FROM brcd_dhgh_kehoach k
+                WHERE TRUNC(ngay_lap_kh) = TRUNC(SYSDATE)
+                  AND NVL(diem_tin_nhiem, 0) >= 32 {filter}
                 ORDER BY diem_tin_nhiem DESC";
 
             using var cmd = new OracleCommand(sql, conn);
             cmd.BindByName = true;
-            if (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-            {
-                cmd.Parameters.Add("ma_dv", OracleDbType.Varchar2).Value = userMaDv;
-            }
+            AddScopeParameters(cmd, scope, maDv, diaBanId);
 
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -260,16 +270,18 @@ namespace DTNTB.Infrastructure.Services
             return list;
         }
 
-        public async Task<(bool Success, string Message)> AssignPhieuAsync(decimal phieuId, string maNvGiao, string? ghiChu)
+        public async Task<(bool Success, string Message)> AssignPhieuAsync(
+            decimal phieuId, UserDataScopeLevel scope, string? maDv, string? diaBanId, string maNvGiao, string? ghiChu)
         {
+            string selectScopeFilter = BuildScopeFilter(scope, maDv, diaBanId, "k.ma_dv");
             using var conn = CreateConnection();
             await conn.OpenAsync();
 
             string sqlSelect = @"
                 SELECT ma_nvkt, ten_nvkt, ma_tb, ten_tb, diem_tin_nhiem, ten_dv, trangthai_phieu,
                        diem_tgsd, diem_dadv, diem_tttt, diem_tbi, diem_suyhao, diem_offlos, diem_bhll, diem_kohl, diem_tgsc
-                FROM brcd_dhgh_kehoach
-                WHERE phieu_id = :phieu_id";
+                FROM brcd_dhgh_kehoach k
+                WHERE phieu_id = :phieu_id {selectScopeFilter}";
 
             string maNvKt = "", tenNvKt = "", maTb = "", tenTb = "", tenDv = "";
             int diemTinNhiem = 0, dTgsd = 0, dDadv = 0, dTttt = 0, dTbi = 0, dSuyhao = 0, dLos = 0, dBhll = 0, dKohl = 0;
@@ -279,6 +291,7 @@ namespace DTNTB.Infrastructure.Services
             {
                 cmdSel.BindByName = true;
                 cmdSel.Parameters.Add("phieu_id", OracleDbType.Decimal).Value = phieuId;
+                AddScopeParameters(cmdSel, scope, maDv, diaBanId);
                 using var reader = await cmdSel.ExecuteReaderAsync();
                 if (await reader.ReadAsync())
                 {
@@ -307,6 +320,9 @@ namespace DTNTB.Infrastructure.Services
                 }
             }
 
+            // Oracle phiên bản hiện tại không cho alias ở UPDATE; dùng tên bảng đầy đủ
+            // để correlated EXISTS vẫn tham chiếu đúng dòng phiếu bên ngoài.
+            string updateScopeFilter = BuildScopeFilter(scope, maDv, diaBanId, "brcd_dhgh_kehoach.ma_dv");
             string sqlUpdate = @"
                 UPDATE brcd_dhgh_kehoach
                 SET trangthai_phieu = 1,
@@ -315,7 +331,7 @@ namespace DTNTB.Infrastructure.Services
                     ma_nv_nhan = ma_nvkt,
                     ten_nv_nhan = ten_nvkt,
                     ghi_chu_giao = :ghi_chu_giao
-                WHERE phieu_id = :phieu_id AND trangthai_phieu = 0";
+                WHERE phieu_id = :phieu_id AND trangthai_phieu = 0 {updateScopeFilter}";
 
             using (var cmdUpd = new OracleCommand(sqlUpdate, conn))
             {
@@ -323,6 +339,7 @@ namespace DTNTB.Infrastructure.Services
                 cmdUpd.Parameters.Add("ma_nv_giao", OracleDbType.Varchar2).Value = maNvGiao;
                 cmdUpd.Parameters.Add("ghi_chu_giao", OracleDbType.NVarchar2).Value = (object?)ghiChu ?? DBNull.Value;
                 cmdUpd.Parameters.Add("phieu_id", OracleDbType.Decimal).Value = phieuId;
+                AddScopeParameters(cmdUpd, scope, maDv, diaBanId);
 
                 int rows = await cmdUpd.ExecuteNonQueryAsync();
                 if (rows > 0)
@@ -336,12 +353,10 @@ namespace DTNTB.Infrastructure.Services
             return (false, "Không thể cập nhật trạng thái phiếu.");
         }
 
-        public async Task<(int Count, string Message)> AssignAllPhieuAsync(string? maDv, bool isSuperAdmin, string maNvGiao, string? ghiChuChung)
+        public async Task<(int Count, string Message)> AssignAllPhieuAsync(
+            UserDataScopeLevel scope, string? maDv, string? diaBanId, string maNvGiao, string? ghiChuChung)
         {
-            string userMaDv = (maDv?.Length > 7 ? maDv.Substring(0, 7) : maDv)?.Trim() ?? string.Empty;
-            string filter = (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                ? " AND TRIM(ma_dv) = TRIM(:ma_dv)"
-                : "";
+            string filter = BuildScopeFilter(scope, maDv, diaBanId, "k.ma_dv");
 
             using var conn = CreateConnection();
             await conn.OpenAsync();
@@ -349,17 +364,16 @@ namespace DTNTB.Infrastructure.Services
             string sqlGet = $@"
                 SELECT phieu_id, ma_nvkt, ten_nvkt, ma_tb, ten_tb, diem_tin_nhiem, ten_dv,
                        diem_tgsd, diem_dadv, diem_tttt, diem_tbi, diem_suyhao, diem_offlos, diem_bhll, diem_kohl, diem_tgsc
-                FROM brcd_dhgh_kehoach
-                WHERE TRUNC(ngay_lap_kh) = TRUNC(SYSDATE) AND NVL(trangthai_phieu, 0) = 0 {filter}";
+                FROM brcd_dhgh_kehoach k
+                WHERE TRUNC(ngay_lap_kh) = TRUNC(SYSDATE)
+                  AND NVL(diem_tin_nhiem, 0) >= 32
+                  AND NVL(trangthai_phieu, 0) = 0 {filter}";
 
             var list = new List<KeHoachItemDto>();
             using (var cmdGet = new OracleCommand(sqlGet, conn))
             {
                 cmdGet.BindByName = true;
-                if (!isSuperAdmin && !string.IsNullOrWhiteSpace(userMaDv))
-                {
-                    cmdGet.Parameters.Add("ma_dv", OracleDbType.Varchar2).Value = userMaDv;
-                }
+                AddScopeParameters(cmdGet, scope, maDv, diaBanId);
 
                 using var reader = await cmdGet.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
@@ -475,9 +489,9 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
-        public async Task<byte[]> ExportExcelPlansTodayAsync(string? maDv, bool isSuperAdmin)
+        public async Task<byte[]> ExportExcelPlansTodayAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId)
         {
-            var plans = await GetHighRiskPlansTodayAsync(maDv, isSuperAdmin);
+            var plans = await GetHighRiskPlansTodayAsync(scope, maDv, diaBanId);
             using var wb = new XLWorkbook();
             var ws = wb.Worksheets.Add("DanhSachPhieuKeHoach");
 

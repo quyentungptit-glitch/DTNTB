@@ -1,6 +1,4 @@
 using System;
-using System.Linq;
-using System.Security.Claims;
 using System.Threading.Tasks;
 using DTNTB.Core.Constants;
 using DTNTB.Core.DTOs;
@@ -24,67 +22,22 @@ namespace DTNTB.API.Controllers
             _currentUserService = currentUserService;
         }
 
-        private (string MaNv, string MaDv, bool IsSuperAdmin, bool CanAccessDashboard, bool CanActionDashboard) GetContext()
+        private (string MaNv, string MaDv, string DiaBanId, UserDataScopeLevel Scope, bool HasManagementScope) GetContext()
         {
-            // 1. Lấy mã NV và mã ĐV từ CurrentUserService hoặc Fallback qua Claims
-            string maNv = _currentUserService.MaNv
-                       ?? User.FindFirst("ma_nv")?.Value
-                       ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                       ?? "";
+            // Permission được ASP.NET Core kiểm tra bằng [Authorize(Policy = ...)].
+            // data_scope từ JWT chỉ quyết định phạm vi dữ liệu, không suy luận từ role.
+            var scope = _currentUserService.ScopeLevel;
+            bool isManagementScope = scope is UserDataScopeLevel.ToanTinh
+                or UserDataScopeLevel.DiaBan
+                or UserDataScopeLevel.DonVi
+                or UserDataScopeLevel.ToQuanLy;
 
-            string maDv = _currentUserService.MaDv
-                       ?? User.FindFirst("ma_dv")?.Value
-                       ?? "";
-
-            // 2. Lấy toàn bộ claims để kiểm tra linh hoạt không phân biệt hoa thường
-            var userClaims = User.Claims.ToList();
-
-            string scope = userClaims.FirstOrDefault(c =>
-                c.Type.Equals("dataScope", StringComparison.OrdinalIgnoreCase) ||
-                c.Type.Equals("datascope", StringComparison.OrdinalIgnoreCase) ||
-                c.Type.EndsWith("scope", StringComparison.OrdinalIgnoreCase))?.Value?.ToUpper() ?? "";
-
-            string role = userClaims.FirstOrDefault(c =>
-                c.Type.Equals("level_role_dtntb", StringComparison.OrdinalIgnoreCase) ||
-                c.Type.Equals("role", StringComparison.OrdinalIgnoreCase) ||
-                c.Type == ClaimTypes.Role ||
-                c.Type.EndsWith("role", StringComparison.OrdinalIgnoreCase))?.Value?.ToUpper() ?? "";
-
-            var permissions = userClaims
-                .Where(c => c.Type.Equals("permission", StringComparison.OrdinalIgnoreCase) ||
-                            c.Type.Equals("permissions", StringComparison.OrdinalIgnoreCase))
-                .Select(c => c.Value.ToUpper())
-                .ToHashSet();
-
-            // 3. Phân định quyền Admin Toàn tỉnh
-            bool isSuperAdmin = scope.Contains("TOAN_TINH")
-                             || scope.Contains("GLOBAL")
-                             || role == "1"
-                             || role.Contains("ADMIN")
-                             || permissions.Contains(AppPermissions.DTNTB.MANAGE_ALL)
-                             || userClaims.Any(c => c.Value.ToUpper().Contains("TOAN_TINH"));
-
-            // 4. Quyền truy cập Dashboard: Chỉ mở cho MANAGE_ALL, MANAGE_AREA, MANAGE_UNIT hoặc quyền DASHBOARD.VIEW
-            bool canAccessDashboard = isSuperAdmin
-                || permissions.Contains(AppPermissions.DASHBOARD.VIEW)
-                || permissions.Contains(AppPermissions.DTNTB.MANAGE_ALL)
-                || permissions.Contains(AppPermissions.DTNTB.MANAGE_AREA)
-                || permissions.Contains(AppPermissions.DTNTB.MANAGE_UNIT)
-                || scope.Contains("DIA_BAN")
-                || scope.Contains("AREA")
-                || scope.Contains("DON_VI")
-                || scope.Contains("UNIT")
-                || role == "2";
-
-            // 5. Quyền giao phiếu: Yêu cầu quyền DASHBOARD.ACTION và phải thuộc nhóm có quyền quản lý
-            bool canActionDashboard = canAccessDashboard && (
-                permissions.Contains(AppPermissions.DASHBOARD.ACTION) ||
-                permissions.Contains(AppPermissions.DTNTB.MANAGE_ALL) ||
-                permissions.Contains(AppPermissions.DTNTB.MANAGE_UNIT) ||
-                isSuperAdmin
-            );
-
-            return (maNv, maDv, isSuperAdmin, canAccessDashboard, canActionDashboard);
+            return (
+                _currentUserService.MaNv ?? string.Empty,
+                _currentUserService.MaDv ?? string.Empty,
+                _currentUserService.DiaBanId ?? string.Empty,
+                scope,
+                isManagementScope);
         }
 
         // ==============================================================================
@@ -92,54 +45,61 @@ namespace DTNTB.API.Controllers
         // ==============================================================================
 
         [HttpGet("kpis")]
+        [Authorize(Policy = AppPermissions.DASHBOARD.VIEW)]
+        [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
         public async Task<IActionResult> GetKpis()
         {
-            var (_, maDv, isSuperAdmin, canAccess, _) = GetContext();
-            if (!canAccess)
+            var (_, maDv, diaBanId, scope, hasManagementScope) = GetContext();
+            if (!hasManagementScope)
             {
-                return StatusCode(403, new { message = "Bạn không có quyền truy cập Dashboard Quản trị mắt lưới." });
+                return Forbid();
             }
 
-            var res = await _dashboardService.GetKpisAndChartsAsync(maDv, isSuperAdmin);
+            var res = await _dashboardService.GetKpisAndChartsAsync(scope, maDv, diaBanId);
             return Ok(res);
         }
 
         [HttpGet("recent-activities")]
+        [Authorize(Policy = AppPermissions.DASHBOARD.VIEW)]
+        [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
         public async Task<IActionResult> GetRecentActivities()
         {
-            var (_, maDv, isSuperAdmin, canAccess, _) = GetContext();
-            if (!canAccess)
+            var (_, maDv, diaBanId, scope, hasManagementScope) = GetContext();
+            if (!hasManagementScope)
             {
-                return StatusCode(403, new { message = "Bạn không có quyền truy cập Dashboard Quản trị mắt lưới." });
+                return Forbid();
             }
 
-            var res = await _dashboardService.GetRecentActivitiesAsync(maDv, isSuperAdmin);
+            var res = await _dashboardService.GetRecentActivitiesAsync(scope, maDv, diaBanId);
             return Ok(res);
         }
 
         [HttpGet("high-risk-plans")]
+        [Authorize(Policy = AppPermissions.DASHBOARD.VIEW)]
+        [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
         public async Task<IActionResult> GetHighRiskPlans()
         {
-            var (_, maDv, isSuperAdmin, canAccess, _) = GetContext();
-            if (!canAccess)
+            var (_, maDv, diaBanId, scope, hasManagementScope) = GetContext();
+            if (!hasManagementScope)
             {
-                return StatusCode(403, new { message = "Bạn không có quyền xem danh sách phiếu kế hoạch hôm nay." });
+                return Forbid();
             }
 
-            var res = await _dashboardService.GetHighRiskPlansTodayAsync(maDv, isSuperAdmin);
+            var res = await _dashboardService.GetHighRiskPlansTodayAsync(scope, maDv, diaBanId);
             return Ok(res);
         }
 
         [HttpGet("export-excel")]
+        [Authorize(Policy = AppPermissions.DASHBOARD.EXPORT)]
         public async Task<IActionResult> ExportExcel()
         {
-            var (_, maDv, isSuperAdmin, canAccess, _) = GetContext();
-            if (!canAccess)
+            var (_, maDv, diaBanId, scope, hasManagementScope) = GetContext();
+            if (!hasManagementScope)
             {
-                return StatusCode(403, new { message = "Bạn không có quyền xuất danh sách phiếu kế hoạch." });
+                return Forbid();
             }
 
-            var bytes = await _dashboardService.ExportExcelPlansTodayAsync(maDv, isSuperAdmin);
+            var bytes = await _dashboardService.ExportExcelPlansTodayAsync(scope, maDv, diaBanId);
             string filename = $"DS_PhieuKeHoach_{DateTime.Now:ddMMyyyy}.xlsx";
             return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename);
         }
@@ -149,29 +109,31 @@ namespace DTNTB.API.Controllers
         // ==============================================================================
 
         [HttpPost("assign-plan")]
+        [Authorize(Policy = AppPermissions.DASHBOARD.ACTION)]
         public async Task<IActionResult> AssignPlan([FromBody] AssignPlanRequest req)
         {
-            var (maNv, _, _, canAccess, canAction) = GetContext();
-            if (!canAccess || !canAction)
+            var (maNv, maDv, diaBanId, scope, hasManagementScope) = GetContext();
+            if (!hasManagementScope)
             {
-                return StatusCode(403, new { message = "Bạn không có quyền thực hiện giao phiếu kế hoạch (Thiếu quyền DASHBOARD.ACTION)." });
+                return Forbid();
             }
 
-            var (success, msg) = await _dashboardService.AssignPhieuAsync(req.PhieuId, maNv, req.GhiChuGiao);
+            var (success, msg) = await _dashboardService.AssignPhieuAsync(req.PhieuId, scope, maDv, diaBanId, maNv, req.GhiChuGiao);
             if (!success) return BadRequest(new { message = msg });
             return Ok(new { message = msg });
         }
 
         [HttpPost("assign-all-plans")]
+        [Authorize(Policy = AppPermissions.DASHBOARD.ACTION)]
         public async Task<IActionResult> AssignAllPlans([FromBody] AssignAllPlansRequest req)
         {
-            var (maNv, maDv, isSuperAdmin, canAccess, canAction) = GetContext();
-            if (!canAccess || !canAction)
+            var (maNv, maDv, diaBanId, scope, hasManagementScope) = GetContext();
+            if (!hasManagementScope)
             {
-                return StatusCode(403, new { message = "Bạn không có quyền giao hàng loạt phiếu kế hoạch (Thiếu quyền DASHBOARD.ACTION)." });
+                return Forbid();
             }
 
-            var (count, msg) = await _dashboardService.AssignAllPhieuAsync(maDv, isSuperAdmin, maNv, req.GhiChuChung);
+            var (count, msg) = await _dashboardService.AssignAllPhieuAsync(scope, maDv, diaBanId, maNv, req.GhiChuChung);
             return Ok(new { count, message = msg });
         }
     }

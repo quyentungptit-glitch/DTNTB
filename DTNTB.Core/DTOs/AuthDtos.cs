@@ -50,6 +50,20 @@ namespace DTNTB.Core.DTOs
         public List<string> Permissions { get; set; } = new();
     }
 
+    // Dữ liệu hồ sơ phục vụ hiển thị trên từng form. Không dùng DTO này để
+    // quyết định quyền hay phạm vi dữ liệu; các quyết định đó luôn nằm ở JWT/API.
+    public class CurrentUserProfileDto
+    {
+        public string MaNd { get; set; } = string.Empty;
+        public string MaNv { get; set; } = string.Empty;
+        public string TenNv { get; set; } = string.Empty;
+        public string MaDv { get; set; } = string.Empty;
+        public string TenDv { get; set; } = string.Empty;
+        public string DonViId { get; set; } = string.Empty;
+        public string DiaBanId { get; set; } = string.Empty;
+        public string TenDiaBan { get; set; } = string.Empty;
+    }
+
     public class TokenConversionRequestDto
     {
         [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]

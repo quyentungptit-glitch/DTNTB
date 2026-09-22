@@ -1,16 +1,17 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using DTNTB.Core.Constants;
 using DTNTB.Core.DTOs;
 
 namespace DTNTB.Core.Interfaces
 {
     public interface IDashboardService
     {
-        Task<DashboardKpiDto> GetKpisAndChartsAsync(string? maDv, bool isSuperAdmin);
-        Task<List<RecentActivityDto>> GetRecentActivitiesAsync(string? maDv, bool isSuperAdmin);
-        Task<List<KeHoachItemDto>> GetHighRiskPlansTodayAsync(string? maDv, bool isSuperAdmin);
-        Task<(bool Success, string Message)> AssignPhieuAsync(decimal phieuId, string maNvGiao, string? ghiChu);
-        Task<(int Count, string Message)> AssignAllPhieuAsync(string? maDv, bool isSuperAdmin, string maNvGiao, string? ghiChuChung);
-        Task<byte[]> ExportExcelPlansTodayAsync(string? maDv, bool isSuperAdmin);
+        Task<DashboardKpiDto> GetKpisAndChartsAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId);
+        Task<List<RecentActivityDto>> GetRecentActivitiesAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId);
+        Task<List<KeHoachItemDto>> GetHighRiskPlansTodayAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId);
+        Task<(bool Success, string Message)> AssignPhieuAsync(decimal phieuId, UserDataScopeLevel scope, string? maDv, string? diaBanId, string maNvGiao, string? ghiChu);
+        Task<(int Count, string Message)> AssignAllPhieuAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId, string maNvGiao, string? ghiChuChung);
+        Task<byte[]> ExportExcelPlansTodayAsync(UserDataScopeLevel scope, string? maDv, string? diaBanId);
     }
 }

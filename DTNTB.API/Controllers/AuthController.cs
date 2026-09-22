@@ -102,6 +102,16 @@ namespace DTNTB.API.Controllers
         }
 
         [Authorize]
+        [HttpGet("profile")]
+        public async Task<IActionResult> GetCurrentProfile()
+        {
+            var username = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            var profile = await _authService.GetCurrentUserProfileAsync(username ?? string.Empty);
+            if (profile == null) return NotFound(new { message = "Không tìm thấy hồ sơ người dùng." });
+            return Ok(profile);
+        }
+
+        [Authorize]
         [HttpPost("logout")]
         public IActionResult Logout()
         {

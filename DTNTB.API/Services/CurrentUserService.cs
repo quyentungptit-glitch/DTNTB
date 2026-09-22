@@ -22,7 +22,6 @@ namespace DTNTB.Infrastructure.Services
         public string? MaNv => User?.FindFirst("ma_nv")?.Value;
         public string? MaDv => User?.FindFirst("ma_dv")?.Value;
         public string? DiaBanId => User?.FindFirst("diaban_id")?.Value;
-        public string? TenDiaBan => User?.FindFirst("ten_diaban")?.Value;
         public string Role => User?.FindFirst(ClaimTypes.Role)?.Value ?? "NVKT";
 
         public string? MaDv7 => string.IsNullOrEmpty(MaDv)

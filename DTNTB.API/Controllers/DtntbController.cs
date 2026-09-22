@@ -18,14 +18,20 @@ namespace DTNTB.API.Controllers
         };
         private readonly IDtntbService _dtntbService;
         private readonly ILogger<DtntbController> _logger;
+        private readonly ICurrentUserService _currentUser;
 
-        public DtntbController(IDtntbService dtntbService, ILogger<DtntbController> logger)
+        public DtntbController(
+            IDtntbService dtntbService,
+            ILogger<DtntbController> logger,
+            ICurrentUserService currentUser)
         {
             _dtntbService = dtntbService;
             _logger = logger;
+            _currentUser = currentUser;
         }
 
         [HttpGet("donvi")]
+        [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
         public async Task<IActionResult> GetDonVi()
         {
             var list = await _dtntbService.GetDonViAsync();
@@ -34,6 +40,7 @@ namespace DTNTB.API.Controllers
         }
 
         [HttpGet("nvkt/{maDv}")]
+        [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
         public async Task<IActionResult> GetNvkt(string maDv)
         {
             if (string.IsNullOrWhiteSpace(maDv) || maDv.Length > 30)
@@ -73,9 +80,16 @@ namespace DTNTB.API.Controllers
         }
 
         [HttpGet("{phieuId}")]
-        [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
         public async Task<IActionResult> GetDetail(long phieuId)
         {
+            // Form View cần VIEW, Form Action cần ACTION. Đây là ngoại lệ có chủ đích
+            // vì hai form cùng dùng dữ liệu chi tiết phiếu; không dựa vào role.
+            if (!_currentUser.HasPermission(AppPermissions.DTNTB.VIEW)
+                && !_currentUser.HasPermission(AppPermissions.DTNTB.ACTION))
+            {
+                return Forbid();
+            }
+
             if (phieuId <= 0) return BadRequest(new { message = "Mã phiếu không hợp lệ." });
 
             var detail = await _dtntbService.GetDetailAsync(phieuId);

@@ -25,7 +25,8 @@ namespace DTNTB.API.Controllers
 
         // Angular xem ảnh qua: GET https://server2/api/media/nguycotb/2026/phieu_10/anh1.jpg
         [HttpGet("{**path}")]
-        [Authorize(Policy = AppPermissions.DTNTB.VIEW)]
+        // Ảnh hiện trường chỉ được dùng ở Form Action, nên yêu cầu đúng quyền ACTION.
+        [Authorize(Policy = AppPermissions.DTNTB.ACTION)]
         [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
         public async Task<IActionResult> GetMedia(string path, [FromQuery] long phieuId)
         {

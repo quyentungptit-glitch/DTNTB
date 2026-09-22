@@ -467,6 +467,31 @@ namespace DTNTB.Infrastructure.Services
             }
         }
 
+        public async Task<CurrentUserProfileDto?> GetCurrentUserProfileAsync(string username)
+        {
+            if (string.IsNullOrWhiteSpace(username)) return null;
+
+            using var conn = new OracleConnection(_connString);
+            // ten_dv thuộc v_donvi_diaban, không thuộc v_nguoidung_diaban (a).
+            // API này được gọi khi form tải để lấy dữ liệu hiển thị mới nhất.
+            const string query = @"
+                SELECT a.ma_nd AS MaNd,
+                       a.ma_nv AS MaNv,
+                       a.ten_nv AS TenNv,
+                       a.ma_dv AS MaDv,
+                       a.donvi_id AS DonViId,
+                       b.ten_dv AS TenDv,
+                       TO_CHAR(b.diaban_id) AS DiaBanId,
+                       b.ten_diaban AS TenDiaBan
+                FROM v_nguoidung_diaban a
+                LEFT JOIN v_donvi_diaban b
+                    ON SUBSTR(TRIM(a.ma_dv), 1, 7) = SUBSTR(TRIM(b.ma_dv), 1, 7)
+                WHERE UPPER(TRIM(a.ma_nd)) = UPPER(TRIM(:username))
+                  AND ROWNUM = 1";
+
+            return await conn.QueryFirstOrDefaultAsync<CurrentUserProfileDto>(query, new { username });
+        }
+
         private string GenerateJwtToken(UserProfileDto user)
         {
             var tokenHandler = new JwtSecurityTokenHandler();
@@ -483,9 +508,7 @@ namespace DTNTB.Infrastructure.Services
                 new Claim(ClaimTypes.Name, user.TenNv),
                 new Claim("ma_nv", user.MaNv),
                 new Claim("ma_dv", user.MaDv),
-                new Claim("donvi_id", user.DonViId),
                 new Claim("diaban_id", user.DiaBanId ?? ""),
-                new Claim("ten_diaban", user.TenDiaBan ?? ""),
                 new Claim(ClaimTypes.Role, user.Role),
                 new Claim("data_scope", user.DataScope)
             };

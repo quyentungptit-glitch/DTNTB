@@ -11,7 +11,6 @@ namespace DTNTB.Core.Interfaces
         string? MaDv7 { get; }
         string? MaDv11 { get; }
         string? DiaBanId { get; }   // <-- THÊM MỚI
-        string? TenDiaBan { get; }  // <-- THÊM MỚI
         string Role { get; }
         UserDataScopeLevel ScopeLevel { get; }
         bool HasPermission(string permission);
