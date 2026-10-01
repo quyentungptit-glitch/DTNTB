@@ -95,6 +95,7 @@ builder.Services.AddHttpClient<IAuthService, AuthService>(client =>
     client.MaxResponseContentBufferSize = 1024 * 1024;
 });
 builder.Services.AddScoped<IDtntbService, DtntbService>();
+builder.Services.AddScoped<IGhttService, GhttService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 if (builder.Configuration.GetValue<bool>("BackgroundWorkers:FcmNotificationEnabled"))

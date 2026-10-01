@@ -42,6 +42,17 @@
             public const string DELETE      = "PERMISSIONS.HETHONG.DELETE";
             public const string PHAN_QUYEN  = "PERMISSIONS.HETHONG.PHAN_QUYEN";
         }
+
+        // ==========================================
+        // MODULE: BÁO CÁO GIAO HẠN TRẢ TRƯỚC (GHTT)
+        // ==========================================
+        public static class GHTT
+        {
+            public const string VIEW            = "PERMISSIONS.GHTT.VIEW";         // Xem dữ liệu báo cáo GHTT (btnxem)
+            public const string EXPORT          = "PERMISSIONS.GHTT.EXPORT";       // Tải/Xuất file Excel báo cáo GHTT (btndowload)
+            public const string TONG_HOP        = "PERMISSIONS.GHTT.TONG_HOP";     // Tổng hợp / Đồng bộ số liệu GHTT (btntonghop)
+            public const string CHOT_SO_LIEU    = "PERMISSIONS.GHTT.CHOT_SO_LIEU"; // Chốt số liệu GHTT (btnchotsl - thay thế kiểm tra level_role == 1)
+        }
     }
 
     // ==========================================
