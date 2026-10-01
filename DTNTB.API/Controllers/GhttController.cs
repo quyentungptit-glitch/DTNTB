@@ -28,16 +28,7 @@ namespace DTNTB.API.Controllers
                 ?? "SYSTEM";
         }
 
-        // 1. LẤY DANH SÁCH ĐƠN VỊ DROPDOWN
-        [HttpGet("don-vi")]
-        [Authorize(Policy = AppPermissions.GHTT.VIEW)]
-        public async Task<IActionResult> GetDonVi([FromQuery] string loaiDv, [FromQuery] int thang)
-        {
-            var data = await _ghttService.GetDanhSachDonViAsync(loaiDv, thang);
-            return Ok(data);
-        }
-
-        // 2. LẤY DỮ LIỆU BÁO CÁO (Lấy số liệu)
+        // 1. LẤY BÁO CÁO (Lấy số liệu)
         [HttpGet("report")]
         [Authorize(Policy = AppPermissions.GHTT.VIEW)]
         public async Task<IActionResult> GetReport(
@@ -45,11 +36,37 @@ namespace DTNTB.API.Controllers
             [FromQuery] int donvi = 0,
             [FromQuery] string loaiDv = "ALL")
         {
-            var result = await _ghttService.GetBaoCaoGhttAsync(thang, donvi, loaiDv);
+            string dataScope = User.FindFirst("data_scope")?.Value?.ToUpper().Trim() ?? "NHAN_VIEN";
+            string username = GetCurrentUserId();
+
+            // Nếu cấp 4 (TO_QL) hoặc cấp 5 (NHAN_VIEN): Bắt buộc phạm vi xem là NVDB
+            if (dataScope == "TO_QL" || dataScope == "NHAN_VIEN")
+            {
+                loaiDv = "NVDB";
+            }
+
+            var result = await _ghttService.GetBaoCaoGhttAsync(thang, donvi, loaiDv, dataScope, username);
             return Ok(result);
         }
 
-        // 3. XUẤT FILE EXCEL BÁO CÁO (Tải số liệu)
+        // 2. LẤY DANH SÁCH ĐƠN VỊ DROPDOWN
+        [HttpGet("don-vi")]
+        [Authorize(Policy = AppPermissions.GHTT.VIEW)]
+        public async Task<IActionResult> GetDonVi([FromQuery] string loaiDv, [FromQuery] int thang)
+        {
+            string dataScope = User.FindFirst("data_scope")?.Value?.ToUpper().Trim() ?? "NHAN_VIEN";
+            string username = GetCurrentUserId();
+
+            if (dataScope == "TO_QL" || dataScope == "NHAN_VIEN")
+            {
+                loaiDv = "NVDB";
+            }
+
+            var data = await _ghttService.GetDanhSachDonViAsync(loaiDv, thang, dataScope, username);
+            return Ok(data);
+        }
+
+        // 3. XUẤT FILE EXCEL BÁO CÁO
         [HttpGet("export")]
         [Authorize(Policy = AppPermissions.GHTT.EXPORT)]
         public async Task<IActionResult> ExportExcel(
@@ -57,7 +74,15 @@ namespace DTNTB.API.Controllers
             [FromQuery] int donvi = 0,
             [FromQuery] string loaiDv = "ALL")
         {
-            var fileBytes = await _ghttService.ExportExcelGhttAsync(thang, donvi, loaiDv);
+            string dataScope = User.FindFirst("data_scope")?.Value?.ToUpper().Trim() ?? "NHAN_VIEN";
+            string username = GetCurrentUserId();
+
+            if (dataScope == "TO_QL" || dataScope == "NHAN_VIEN")
+            {
+                loaiDv = "NVDB";
+            }
+
+            var fileBytes = await _ghttService.ExportExcelGhttAsync(thang, donvi, loaiDv, dataScope, username);
             string fileName = $"BaoCao_GHTT_{thang}.xlsx";
             return File(fileBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
         }
@@ -78,7 +103,7 @@ namespace DTNTB.API.Controllers
             return Ok(new { success = true, message = "Đồng bộ và tổng hợp số liệu thành công." });
         }
 
-        // 5. CHỐT SỐ LIỆU (Yêu cầu quyền AppPermissions.GHTT.CHOT_SO_LIEU)
+        // 5. CHỐT SỐ LIỆU
         [HttpPost("chot-so-lieu")]
         [Authorize(Policy = AppPermissions.GHTT.CHOT_SO_LIEU)]
         public async Task<IActionResult> ChotSoLieu([FromBody] GhttActionRequestDto request)

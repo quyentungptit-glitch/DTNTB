@@ -19,18 +19,17 @@ namespace DTNTB.Infrastructure.Services
 
         public GhttService(IConfiguration config)
         {
-            // Tương thích với connection string đang dùng trong dự án
             _connString = config.GetConnectionString("ConnectionString_NBH")
                        ?? config.GetConnectionString("ConnectionString_NBH_NEW")
                        ?? string.Empty;
         }
 
         // 1. LẤY DANH MỤC ĐƠN VỊ CHO DROPDOWN
-        public async Task<List<GhttDonViDto>> GetDanhSachDonViAsync(string loaiDv, int thang)
+        // 1. LẤY DANH MỤC ĐƠN VỊ CHO DROPDOWN
+        public async Task<List<GhttDonViDto>> GetDanhSachDonViAsync(string loaiDv, int thang, string dataScope = "TOAN_TINH", string username = "")
         {
             var list = new List<GhttDonViDto>();
 
-            // Nếu không phải nhân viên địa bàn, luôn trả về đơn vị ALL mà không cần truy vấn phức tạp
             if (!string.Equals(loaiDv, "NVDB", StringComparison.OrdinalIgnoreCase))
             {
                 list.Add(new GhttDonViDto { DonViId = 0, TenDv = "ALL" });
@@ -40,17 +39,34 @@ namespace DTNTB.Infrastructure.Services
             try
             {
                 using var conn = new OracleConnection(_connString);
-                string qry = @"SELECT DISTINCT donvi_id AS DonViId, ten_dv AS TenDv 
-                        FROM ghtt_tonghop 
-                        WHERE sl_thang = :thang AND ma_dv LIKE '215.3__'
-                        UNION ALL
-                        SELECT DISTINCT donvi_id AS DonViId, ten_dv AS TenDv 
-                        FROM ghtt_tonghop 
-                        WHERE sl_thang = :thang AND ma_dv LIKE '215.7__'";
-
                 await conn.OpenAsync();
+
+                // NẾU LÀ CẤP 4 (TO_QL) HOẶC CẤP 5 (NHAN_VIEN):
+                // Khớp theo 7 ký tự đầu của ma_dv để lấy đúng Đơn vị cha trong ghtt_tonghop
+                string userDonViFilter = "";
+                if (dataScope == "TO_QL" || dataScope == "NHAN_VIEN")
+                {
+                    userDonViFilter = @" AND SUBSTR(TRIM(ma_dv), 1, 7) IN (
+                SELECT SUBSTR(TRIM(ma_dv), 1, 7) 
+                FROM v_nguoidung_diaban 
+                WHERE UPPER(TRIM(ma_nd)) = UPPER(TRIM(:username))
+                  AND ma_dv IS NOT NULL
+            )";
+                }
+
+                string qry = $@"SELECT DISTINCT donvi_id AS DonViId, ten_dv AS TenDv 
+                        FROM ghtt_tonghop 
+                        WHERE sl_thang = :thang 
+                          AND (ma_dv LIKE '215.3__' OR ma_dv LIKE '215.7__')
+                          {userDonViFilter}
+                        ORDER BY ten_dv";
+
                 using var cmd = new OracleCommand(qry, conn);
                 cmd.Parameters.Add("thang", OracleDbType.Varchar2).Value = thang.ToString();
+                if (!string.IsNullOrEmpty(userDonViFilter))
+                {
+                    cmd.Parameters.Add("username", OracleDbType.Varchar2).Value = username;
+                }
 
                 using var reader = await cmd.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
@@ -62,18 +78,43 @@ namespace DTNTB.Infrastructure.Services
                     });
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Ghi log nếu có và trả về danh sách mặc định thay vì làm sập API
                 list.Add(new GhttDonViDto { DonViId = 0, TenDv = "ALL" });
             }
 
             return list;
         }
 
-        // 2. LẤY DỮ LIỆU BÁO CÁO VÀ PIVOT MA TRẬN ĐỘNG
-        // 1. Sửa hàm GetBaoCaoGhttAsync bọc try-catch an toàn
-        public async Task<GhttReportResponseDto> GetBaoCaoGhttAsync(int thang, int donvi, string loaiDv)
+        // 2. HÀM HỖ TRỢ: Lấy donvi_id đơn vị cha của user trong bảng ghtt_tonghop theo 7 ký tự đầu ma_dv
+        private async Task<int> GetUserDonViIdAsync(string username)
+        {
+            try
+            {
+                using var conn = new OracleConnection(_connString);
+                // Tìm donvi_id cấp đơn vị trong ghtt_tonghop khớp với 7 ký tự đầu ma_dv của người dùng
+                string qry = @"
+            SELECT g.donvi_id 
+            FROM ghtt_tonghop g
+            INNER JOIN v_nguoidung_diaban u 
+                ON SUBSTR(TRIM(g.ma_dv), 1, 7) = SUBSTR(TRIM(u.ma_dv), 1, 7)
+            WHERE UPPER(TRIM(u.ma_nd)) = UPPER(TRIM(:username))
+              AND ROWNUM = 1";
+
+                await conn.OpenAsync();
+                using var cmd = new OracleCommand(qry, conn);
+                cmd.Parameters.Add("username", OracleDbType.Varchar2).Value = username;
+                var val = await cmd.ExecuteScalarAsync();
+                return (val != null && val != DBNull.Value) ? Convert.ToInt32(val) : 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        // 2. LẤY DỮ LIỆU BÁO CÁO VÀ PIVOT MA TRẬN ĐỘNG (HOÀN TOÀN TỪ DATABASE)
+        public async Task<GhttReportResponseDto> GetBaoCaoGhttAsync(int thang, int donvi, string loaiDv, string dataScope = "TOAN_TINH", string username = "")
         {
             var response = new GhttReportResponseDto();
             try
@@ -81,24 +122,49 @@ namespace DTNTB.Infrastructure.Services
                 response.LastSyncGhtt = await GetLastSyncAsync(thang, "GHTT");
                 response.LastSyncChot = await GetLastSyncAsync(thang, "CHOT_GHTT");
 
-                DataTable dt = await LoadGhttTongHopDataTableAsync(thang, donvi, loaiDv);
-                if (dt == null || dt.Rows.Count == 0) return response;
+                // Nếu là cấp 4 hoặc 5 mà client gửi lên donvi = 0, tự động lấy đơn vị của user
+                if ((dataScope == "TO_QL" || dataScope == "NHAN_VIEN") && donvi == 0)
+                {
+                    donvi = await GetUserDonViIdAsync(username);
+                }
 
-                CleanTenDvColumn(dt);
+                DataTable dt = await LoadGhttTongHopDataTableAsync(thang, donvi, loaiDv);
+
+                // Dù không có dòng số liệu nào, vẫn giữ headers
                 List<string> listColumns = DetermineHeaderColumns(dt, loaiDv);
                 response.Headers = listColumns;
+
+                if (dt == null || dt.Rows.Count == 0)
+                {
+                    return response;
+                }
+
+                CleanTenDvColumn(dt);
+
+                if (!string.Equals(loaiDv, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    listColumns = DetermineHeaderColumns(dt, loaiDv);
+                    response.Headers = listColumns;
+                }
+
                 response.Rows = PivotReportData(dt, listColumns, loaiDv);
             }
             catch (Exception)
             {
-                // Trả về response rỗng thay vì làm sập API
-                response.Headers = new List<string>();
+                if (string.Equals(loaiDv, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    response.Headers = new List<string> { "Cá nhân", "Doanh nghiệp" };
+                }
+                else
+                {
+                    response.Headers = new List<string>();
+                }
                 response.Rows = new List<GhttReportRowDto>();
             }
             return response;
         }
 
-        // 2. Sửa hàm PivotReportData dùng Convert.ToDecimal tránh lỗi ép kiểu Oracle
+        // Pivot dữ liệu an toàn dùng Convert.ToDecimal
         private static List<GhttReportRowDto> PivotReportData(DataTable dt, List<string> listColumns, string loaiDv)
         {
             return dt.AsEnumerable()
@@ -111,7 +177,6 @@ namespace DTNTB.Infrastructure.Services
                 .Select(g =>
                 {
                     var minValues = new List<decimal>();
-                    // DÙNG Convert.ToDecimal ĐỂ KHÔNG BỊ LỖI InvalidCastException
                     if ((g.Key.MaCS == "CS1" || g.Key.MaCS == "CS2") && !string.Equals(loaiDv, "ALL", StringComparison.OrdinalIgnoreCase))
                     {
                         minValues = g.Where(x => Convert.ToDecimal(x["TONG"] == DBNull.Value ? 0 : x["TONG"]) > 0)
@@ -166,8 +231,13 @@ namespace DTNTB.Infrastructure.Services
         }
 
         // 3. XUẤT BÁO CÁO EXCEL VỚI CLOSEDXML
-        public async Task<byte[]> ExportExcelGhttAsync(int thang, int donvi, string loaiDv)
+        public async Task<byte[]> ExportExcelGhttAsync(int thang, int donvi, string loaiDv, string dataScope = "TOAN_TINH", string username = "")
         {
+            if ((dataScope == "TO_QL" || dataScope == "NHAN_VIEN") && donvi == 0)
+            {
+                donvi = await GetUserDonViIdAsync(username);
+            }
+
             DataTable dt = await LoadGhttTongHopDataTableAsync(thang, donvi, loaiDv);
             CleanTenDvColumn(dt);
             List<string> listColumns = DetermineHeaderColumns(dt, loaiDv);
@@ -175,7 +245,6 @@ namespace DTNTB.Infrastructure.Services
             using var wb = new XLWorkbook();
             var ws = wb.Worksheets.Add("BaoCaoGHTT");
 
-            // Tạo Header
             ws.Cell(1, 1).Value = "Mã chỉ số";
             ws.Cell(1, 2).Value = "Tên chỉ số";
             ws.Cell(1, 3).Value = "Mục tiêu";
@@ -184,7 +253,6 @@ namespace DTNTB.Infrastructure.Services
                 ws.Cell(1, i + 4).Value = listColumns[i];
             }
 
-            // Định dạng Header xanh chữ trắng
             var headerRange = ws.Range(1, 1, 1, listColumns.Count + 3);
             headerRange.Style.Fill.BackgroundColor = XLColor.FromHtml("#007bff");
             headerRange.Style.Font.FontColor = XLColor.White;
@@ -193,9 +261,9 @@ namespace DTNTB.Infrastructure.Services
 
             var groupedData = dt.AsEnumerable().GroupBy(row => new
             {
-                MaCS = row.Field<string>("MA_CS"),
-                Name = row.Field<string>("NAME"),
-                MucTieu = row.Field<string>("MUCTIEU")
+                MaCS = row["MA_CS"]?.ToString() ?? "",
+                Name = row["NAME"]?.ToString() ?? "",
+                MucTieu = row["MUCTIEU"]?.ToString() ?? ""
             }).ToList();
 
             int currentRow = 2;
@@ -258,7 +326,7 @@ namespace DTNTB.Infrastructure.Services
             return ms.ToArray();
         }
 
-        // 4. TỔNG HỢP / ĐỒNG BỘ SỐ LIỆU
+        // 4. TỔNG HỢP SỐ LIỆU
         public async Task<bool> TongHopSoLieuAsync(int thang, string nguoiCn)
         {
             using var conn = new OracleConnection(_connString);
@@ -360,7 +428,7 @@ namespace DTNTB.Infrastructure.Services
                     return reader["noidung"]?.ToString();
                 }
             }
-            catch { /* Log error nếu cần */ }
+            catch { }
             return null;
         }
 
@@ -391,7 +459,7 @@ namespace DTNTB.Infrastructure.Services
             {
                 return dt.AsEnumerable()
                          .Where(r => r["TEN_NV"] != DBNull.Value)
-                         .Select(r => r.Field<string>("TEN_NV") ?? "")
+                         .Select(r => r["TEN_NV"]?.ToString() ?? "")
                          .Distinct()
                          .OrderBy(x => x)
                          .ToList();
@@ -399,7 +467,7 @@ namespace DTNTB.Infrastructure.Services
 
             return dt.AsEnumerable()
                      .Where(r => r["TEN_DV"] != DBNull.Value)
-                     .Select(r => r.Field<string>("TEN_DV") ?? "")
+                     .Select(r => r["TEN_DV"]?.ToString() ?? "")
                      .Distinct()
                      .OrderBy(x => x)
                      .ToList();
@@ -408,10 +476,10 @@ namespace DTNTB.Infrastructure.Services
         private static DataRow? FindMatchedRow(IGrouping<dynamic, DataRow> g, string col, string loaiDv)
         {
             if (string.Equals(loaiDv, "ALL", StringComparison.OrdinalIgnoreCase))
-                return g.FirstOrDefault(x => x.Field<string>("MA_DV") == (col == "Cá nhân" ? "KHCN" : "KHDN"));
+                return g.FirstOrDefault(x => (x["MA_DV"]?.ToString() ?? "") == (col == "Cá nhân" ? "KHCN" : "KHDN"));
             if (string.Equals(loaiDv, "NVDB", StringComparison.OrdinalIgnoreCase))
-                return g.FirstOrDefault(x => x.Field<string>("TEN_NV") == col);
-            return g.FirstOrDefault(x => x.Field<string>("TEN_DV") == col);
+                return g.FirstOrDefault(x => (x["TEN_NV"]?.ToString() ?? "") == col);
+            return g.FirstOrDefault(x => (x["TEN_DV"]?.ToString() ?? "") == col);
         }
     }
 }

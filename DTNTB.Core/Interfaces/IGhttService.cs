@@ -6,9 +6,9 @@ namespace DTNTB.Core.Interfaces
 {
     public interface IGhttService
     {
-        Task<List<GhttDonViDto>> GetDanhSachDonViAsync(string loaiDv, int thang);
-        Task<GhttReportResponseDto> GetBaoCaoGhttAsync(int thang, int donvi, string loaiDv);
-        Task<byte[]> ExportExcelGhttAsync(int thang, int donvi, string loaiDv);
+        Task<List<GhttDonViDto>> GetDanhSachDonViAsync(string loaiDv, int thang, string dataScope = "TOAN_TINH", string username = "");
+        Task<GhttReportResponseDto> GetBaoCaoGhttAsync(int thang, int donvi, string loaiDv, string dataScope = "TOAN_TINH", string username = "");
+        Task<byte[]> ExportExcelGhttAsync(int thang, int donvi, string loaiDv, string dataScope = "TOAN_TINH", string username = "");
         Task<bool> TongHopSoLieuAsync(int thang, string nguoiCn);
         Task<string> ChotSoLieuAsync(int thang, string nguoiCn);
     }
