@@ -98,6 +98,7 @@ builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IGhttService, GhttService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddSingleton<INotificationAdminService, NotificationAdminService>();
 if (builder.Configuration.GetValue<bool>("BackgroundWorkers:FcmNotificationEnabled"))
 {
     builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();

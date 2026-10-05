@@ -1,6 +1,5 @@
-using System.Globalization;
 using Dapper;
-using FirebaseAdmin.Messaging;
+using DTNTB.Core.Interfaces;
 using Microsoft.Extensions.Hosting;
 using Oracle.ManagedDataAccess.Client;
 
@@ -14,29 +13,43 @@ public sealed class FcmNotificationWorker : BackgroundService
 {
     private const string NotificationType = "DAILY_PENDING_TICKETS";
     private readonly string _connString;
+    private readonly INotificationAdminService _notificationService;
     private readonly ILogger<FcmNotificationWorker> _logger;
 
-    public FcmNotificationWorker(IConfiguration configuration, ILogger<FcmNotificationWorker> logger)
+    public FcmNotificationWorker(
+        IConfiguration configuration,
+        INotificationAdminService notificationService,
+        ILogger<FcmNotificationWorker> logger)
     {
         _connString = configuration.GetConnectionString("ConnectionString_NBH")
             ?? throw new InvalidOperationException("ConnectionStrings:ConnectionString_NBH chưa được cấu hình.");
         _logger = logger;
+        _notificationService = notificationService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("FcmNotificationWorker đã khởi động; lịch gửi nhắc phiếu tồn là 08:30 mỗi ngày.");
+        _logger.LogInformation("FcmNotificationWorker đã khởi động; lịch gửi được đọc từ cấu hình Quản trị thông báo.");
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTime.Now;
-            var scheduledTime = new DateTime(now.Year, now.Month, now.Day, 8, 30, 0);
-            var nextRun = now < scheduledTime ? scheduledTime : scheduledTime.AddDays(1);
-
             try
             {
-                await Task.Delay(nextRun - now, stoppingToken);
-                await SendDailyPendingTicketsNotificationsAsync(stoppingToken);
+                var settings = await _notificationService.GetSettingsAsync();
+                var now = DateTime.Now;
+                if (settings.DailyEnabled
+                    && TimeOnly.TryParse(settings.DailyTime, out var scheduledTime)
+                    && now.Hour == scheduledTime.Hour
+                    && now.Minute == scheduledTime.Minute)
+                {
+                    await SendDailyPendingTicketsNotificationsAsync(
+                        settings.DailyTitle,
+                        settings.DailyBody,
+                        stoppingToken);
+                }
+
+                var nextMinute = now.AddMinutes(1);
+                await Task.Delay(nextMinute.AddSeconds(-nextMinute.Second).AddMilliseconds(-nextMinute.Millisecond) - DateTime.Now, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -44,12 +57,18 @@ public sealed class FcmNotificationWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Lỗi tiến trình gửi thông báo phiếu tồn lúc 08:30.");
+                _logger.LogError(ex, "Lỗi tiến trình gửi thông báo phiếu tồn.");
+                // Khi bảng cấu hình/chứng chỉ Firebase chưa sẵn sàng, tránh vòng lặp
+                // ghi log liên tục và tự thử lại sau một phút.
+                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
             }
         }
     }
 
-    private async Task SendDailyPendingTicketsNotificationsAsync(CancellationToken stoppingToken)
+    private async Task SendDailyPendingTicketsNotificationsAsync(
+        string titleTemplate,
+        string bodyTemplate,
+        CancellationToken stoppingToken)
     {
         const string scanQuery = @"
             SELECT UPPER(TRIM(nd.ma_nd)) AS MaNvkt, COUNT(1) AS PendingCount
@@ -75,7 +94,6 @@ public sealed class FcmNotificationWorker : BackgroundService
             stoppingToken.ThrowIfCancellationRequested();
 
             var username = item.MaNvkt.Trim().ToLowerInvariant();
-            var topicName = "phieu_nguy_co_ton_" + username.Replace('.', '_');
 
             // Khóa ngày + người dùng + loại thông báo giúp tránh gửi lặp khi ứng dụng chạy lại.
             if (!await TryStartNotificationAuditAsync(connection, username, item.PendingCount))
@@ -86,13 +104,33 @@ public sealed class FcmNotificationWorker : BackgroundService
 
             try
             {
-                var messageId = await PushToFirebaseTopicAsync(topicName, item.PendingCount);
-                await CompleteNotificationAuditAsync(connection, username, "SENT", messageId, null);
+                var title = titleTemplate.Replace("{count}", item.PendingCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                var body = bodyTemplate.Replace("{count}", item.PendingCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                var result = await _notificationService.SendToUsernameAsync(
+                    username,
+                    NotificationType,
+                    title,
+                    body,
+                    new Dictionary<string, string>
+                    {
+                        ["route"] = "/nguycotb/view",
+                        ["click_action"] = "open_default_list",
+                        ["badge_count"] = item.PendingCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["notification_type"] = NotificationType
+                    },
+                    "SYSTEM");
+
+                if (!result.Success)
+                {
+                    throw new InvalidOperationException(result.Message);
+                }
+
+                await CompleteNotificationAuditAsync(connection, username, "SENT", result.FirebaseMessageId, null);
                 _logger.LogInformation(
                     "Đã gửi nhắc phiếu tồn cho {Username}; số phiếu: {PendingCount}; Firebase message ID: {MessageId}.",
                     username,
                     item.PendingCount,
-                    messageId);
+                    result.FirebaseMessageId);
             }
             catch (Exception ex)
             {
@@ -155,26 +193,6 @@ public sealed class FcmNotificationWorker : BackgroundService
             errorMessage = errorMessage?.Length > 1000 ? errorMessage[..1000] : errorMessage,
             notificationType = NotificationType
         });
-    }
-
-    private static async Task<string> PushToFirebaseTopicAsync(string topicName, int pendingCount)
-    {
-        var message = new Message
-        {
-            Topic = topicName,
-            Notification = new Notification
-            {
-                Title = "🔔 CẢNH BÁO PHIẾU TỒN ĐỌNG",
-                Body = $"Chào bạn, hiện tại bạn đang có {pendingCount} phiếu đo kiểm chưa thực hiện thực địa. Vui lòng xử lý để tránh quá hạn SLA!"
-            },
-            Data = new Dictionary<string, string>
-            {
-                ["click_action"] = "open_default_list",
-                ["badge_count"] = pendingCount.ToString(CultureInfo.InvariantCulture)
-            }
-        };
-
-        return await FirebaseMessaging.DefaultInstance.SendAsync(message);
     }
 
     private sealed class PendingTicketCount

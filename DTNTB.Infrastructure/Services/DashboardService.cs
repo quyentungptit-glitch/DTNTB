@@ -8,7 +8,6 @@ using ClosedXML.Excel;
 using DTNTB.Core.Constants;
 using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
-using FirebaseAdmin.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Oracle.ManagedDataAccess.Client;
@@ -19,10 +18,15 @@ namespace DTNTB.Infrastructure.Services
     {
         private readonly string _connectionString;
         private readonly ILogger<DashboardService> _logger;
+        private readonly INotificationAdminService _notificationService;
 
-        public DashboardService(IConfiguration configuration, ILogger<DashboardService> logger)
+        public DashboardService(
+            IConfiguration configuration,
+            ILogger<DashboardService> logger,
+            INotificationAdminService notificationService)
         {
             _logger = logger;
+            _notificationService = notificationService;
             _connectionString = configuration.GetConnectionString("ConnectionString_NBH")
                              ?? configuration.GetConnectionString("DefaultConnection")
                              ?? throw new InvalidOperationException("Chưa cấu hình ConnectionString_NBH trong file cấu hình.");
@@ -452,24 +456,22 @@ namespace DTNTB.Infrastructure.Services
 
             try
             {
-                var message = new Message
-                {
-                    Topic = BuildPendingTicketTopic(username),
-                    Notification = new Notification
-                    {
-                        Title = "🔔 BẠN CÓ PHIẾU MỚI",
-                        Body = $"Thuê bao {maTb} - {tenTb}. Điểm nguy cơ: {diemTinNhiem}."
-                    },
-                    Data = new Dictionary<string, string>
+                var result = await _notificationService.SendToUsernameAsync(
+                    username,
+                    "ASSIGNED_TICKET",
+                    "🔔 BẠN CÓ PHIẾU MỚI",
+                    $"Thuê bao {maTb} - {tenTb}. Điểm nguy cơ: {diemTinNhiem}.",
+                    new Dictionary<string, string>
                     {
                         ["route"] = "/nguycotb/view",
                         ["notification_type"] = "ASSIGNED_TICKET",
                         ["ma_tb"] = maTb ?? string.Empty,
                         ["ghi_chu_giao"] = ghiChuGiao ?? string.Empty
-                    }
-                };
+                    },
+                    null);
 
-                await FirebaseMessaging.DefaultInstance.SendAsync(message);
+                if (!result.Success)
+                    _logger.LogWarning("Không gửi được FCM giao phiếu cho nhân viên {MaNvKt}: {Message}", maNvKt, result.Message);
             }
             catch (Exception ex)
             {
@@ -485,24 +487,22 @@ namespace DTNTB.Infrastructure.Services
 
             try
             {
-                var message = new Message
-                {
-                    Topic = BuildPendingTicketTopic(username),
-                    Notification = new Notification
-                    {
-                        Title = "🔔 BẠN CÓ PHIẾU MỚI",
-                        Body = $"Bạn được giao {count} phiếu mới. Vui lòng vào danh sách để xử lý."
-                    },
-                    Data = new Dictionary<string, string>
+                var result = await _notificationService.SendToUsernameAsync(
+                    username,
+                    "ASSIGNED_TICKETS",
+                    "🔔 BẠN CÓ PHIẾU MỚI",
+                    $"Bạn được giao {count} phiếu mới. Vui lòng vào danh sách để xử lý.",
+                    new Dictionary<string, string>
                     {
                         ["route"] = "/nguycotb/view",
                         ["notification_type"] = "ASSIGNED_TICKETS",
                         ["assigned_count"] = count.ToString(),
                         ["ghi_chu_giao"] = ghiChuGiao ?? string.Empty
-                    }
-                };
+                    },
+                    null);
 
-                await FirebaseMessaging.DefaultInstance.SendAsync(message);
+                if (!result.Success)
+                    _logger.LogWarning("Không gửi được FCM giao {Count} phiếu cho nhân viên {MaNvKt}: {Message}", count, maNvKt, result.Message);
             }
             catch (Exception ex)
             {
@@ -528,11 +528,6 @@ namespace DTNTB.Infrastructure.Services
             command.Parameters.Add("ma_nv", OracleDbType.Varchar2).Value = maNvKt.Trim();
             var value = await command.ExecuteScalarAsync();
             return value?.ToString()?.Trim() ?? string.Empty;
-        }
-
-        private static string BuildPendingTicketTopic(string username)
-        {
-            return "phieu_nguy_co_ton_" + username.Trim().ToLowerInvariant().Replace('.', '_');
         }
 
         private async Task SendTelegramGiaoPhieuAsync(
