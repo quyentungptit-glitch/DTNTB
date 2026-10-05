@@ -492,6 +492,42 @@ namespace DTNTB.Infrastructure.Services
             return await conn.QueryFirstOrDefaultAsync<CurrentUserProfileDto>(query, new { username });
         }
 
+        public async Task<FcmNotificationPreferenceDto> GetFcmNotificationPreferenceAsync(string username)
+        {
+            if (string.IsNullOrWhiteSpace(username)) return new FcmNotificationPreferenceDto();
+
+            const string query = @"
+                SELECT NVL(fcm_enabled, 0) AS Enabled,
+                       fcm_enabled_at AS UpdatedAt
+                FROM dtntb_sys_user_roles
+                WHERE UPPER(TRIM(ma_nd)) = UPPER(TRIM(:username))";
+
+            await using var conn = new OracleConnection(_connString);
+            var row = await conn.QuerySingleOrDefaultAsync<dynamic>(query, new { username });
+            if (row is null) return new FcmNotificationPreferenceDto();
+
+            return new FcmNotificationPreferenceDto
+            {
+                Enabled = Convert.ToInt32(row.ENABLED) == 1,
+                UpdatedAt = row.UPDATEDAT is null ? null : Convert.ToDateTime(row.UPDATEDAT)
+            };
+        }
+
+        public async Task<bool> SetFcmNotificationPreferenceAsync(string username, bool enabled)
+        {
+            if (string.IsNullOrWhiteSpace(username)) return false;
+
+            const string query = @"
+                UPDATE dtntb_sys_user_roles
+                SET fcm_enabled = :enabled,
+                    fcm_enabled_at = SYSDATE
+                WHERE UPPER(TRIM(ma_nd)) = UPPER(TRIM(:username))";
+
+            await using var conn = new OracleConnection(_connString);
+            var affected = await conn.ExecuteAsync(query, new { username, enabled = enabled ? 1 : 0 });
+            return affected > 0;
+        }
+
         private string GenerateJwtToken(UserProfileDto user)
         {
             var tokenHandler = new JwtSecurityTokenHandler();

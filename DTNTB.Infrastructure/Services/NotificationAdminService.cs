@@ -137,6 +137,18 @@ namespace DTNTB.Infrastructure.Services
             }
 
             var topic = BuildPendingTicketTopic(normalizedUsername);
+            if (!await IsUserFcmEnabledAsync(normalizedUsername))
+            {
+                const string skippedMessage = "Người dùng chưa bật nhận thông báo.";
+                await AddHistoryAsync(notificationType, normalizedUsername, topic, title, body, "SKIPPED", null, skippedMessage, createdBy);
+                return new NotificationSendResultDto
+                {
+                    Success = true,
+                    Skipped = true,
+                    Message = skippedMessage
+                };
+            }
+
             string? firebaseMessageId = null;
             string? error = null;
             try
@@ -211,6 +223,18 @@ namespace DTNTB.Infrastructure.Services
                 // Không để lỗi ghi lịch sử làm hỏng nghiệp vụ giao phiếu/nhắc phiếu.
                 _logger.LogWarning(ex, "Không ghi được lịch sử thông báo {NotificationType} cho {Username}.", notificationType, username);
             }
+        }
+
+        private async Task<bool> IsUserFcmEnabledAsync(string username)
+        {
+            const string sql = @"
+                SELECT NVL(fcm_enabled, 0)
+                FROM dtntb_sys_user_roles
+                WHERE UPPER(TRIM(ma_nd)) = UPPER(TRIM(:username))";
+
+            await using var conn = new OracleConnection(_connectionString);
+            var enabled = await conn.QuerySingleOrDefaultAsync<int?>(sql, new { username });
+            return enabled == 1;
         }
 
         private static string BuildPendingTicketTopic(string username) =>

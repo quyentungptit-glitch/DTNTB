@@ -313,10 +313,20 @@ namespace DTNTB.Infrastructure.Services
                     ) src
                     ON (UPPER(TRIM(target.ma_nd)) = UPPER(TRIM(src.ma_nd)))
                     WHEN MATCHED THEN
-                        UPDATE SET target.role_code = src.role_code, target.assigned_date = SYSDATE
+                        UPDATE SET
+                            target.fcm_enabled = CASE
+                                WHEN UPPER(TRIM(NVL(target.role_code, '#'))) <> UPPER(TRIM(src.role_code)) THEN 0
+                                ELSE NVL(target.fcm_enabled, 0)
+                            END,
+                            target.fcm_enabled_at = CASE
+                                WHEN UPPER(TRIM(NVL(target.role_code, '#'))) <> UPPER(TRIM(src.role_code)) THEN SYSDATE
+                                ELSE target.fcm_enabled_at
+                            END,
+                            target.role_code = src.role_code,
+                            target.assigned_date = SYSDATE
                     WHEN NOT MATCHED THEN
-                        INSERT (ma_nd, role_code, assigned_date) 
-                        VALUES (src.ma_nd, src.role_code, SYSDATE)";
+                        INSERT (ma_nd, role_code, assigned_date, fcm_enabled, fcm_enabled_at)
+                        VALUES (src.ma_nd, src.role_code, SYSDATE, 0, NULL)";
 
                 var rows = await conn.ExecuteAsync(mergeQuery, new
                 {

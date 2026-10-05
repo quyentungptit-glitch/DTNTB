@@ -89,4 +89,10 @@ namespace DTNTB.Core.DTOs
         [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(4096)]
         public string FcmToken { get; set; } = string.Empty;
     }
+
+    public class FcmNotificationPreferenceDto
+    {
+        public bool Enabled { get; set; }
+        public System.DateTime? UpdatedAt { get; set; }
+    }
 }

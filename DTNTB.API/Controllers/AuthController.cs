@@ -129,6 +129,14 @@ namespace DTNTB.API.Controllers
             return Ok(new { success = true });
         }
 
+        [Authorize]
+        [HttpGet("fcm-notification-preference")]
+        public async Task<IActionResult> GetFcmNotificationPreference()
+        {
+            var username = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            return Ok(await _authService.GetFcmNotificationPreferenceAsync(username ?? string.Empty));
+        }
+
 
         // Token thiết bị chỉ được dùng tức thời để Firebase subscribe vào topic.
         // Không lưu token tại CSDL: worker gửi hoàn toàn theo Firebase Topic.
@@ -146,6 +154,10 @@ namespace DTNTB.API.Controllers
             try
             {
                 await FirebaseMessaging.DefaultInstance.SubscribeToTopicAsync(new[] { model.FcmToken.Trim() }, topic);
+                if (!await _authService.SetFcmNotificationPreferenceAsync(username, true))
+                {
+                    return NotFound(new { message = "Không tìm thấy phân quyền người dùng để lưu lựa chọn thông báo." });
+                }
                 return Ok(new { success = true, topic, message = "Đã bật thông báo trên thiết bị này." });
             }
             catch (TokenResponseException ex)
@@ -164,7 +176,17 @@ namespace DTNTB.API.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Không subscribe được FCM token vào topic {Topic} cho {Username}.", topic, username);
+                if (FindException<TokenResponseException>(ex) is not null)
+                {
+                    return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                    {
+                        message = "Firebase chưa xác thực được service account với Google. " +
+                                  "Kiểm tra lại JSON key và kết nối OAuth của máy chủ."
+                    });
+                }
+
                 var errorCode = ex is FirebaseMessagingException firebaseException
+                    && !string.IsNullOrWhiteSpace(firebaseException.MessagingErrorCode.ToString())
                     ? firebaseException.MessagingErrorCode.ToString()
                     : ex.GetType().Name;
                 return StatusCode(StatusCodes.Status503ServiceUnavailable,
@@ -196,9 +218,47 @@ namespace DTNTB.API.Controllers
             return Ok(new { success = true });
         }
 
+        [Authorize]
+        [HttpPost("disable-fcm-notifications")]
+        public async Task<IActionResult> DisableFcmNotifications([FromBody] RegisterFcmTokenDto model)
+        {
+            string username = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(username) || model == null)
+            {
+                return BadRequest(new { message = "Dữ liệu tắt thông báo không hợp lệ." });
+            }
+
+            string topic = BuildPendingTicketTopic(username);
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(model.FcmToken))
+                {
+                    await FirebaseMessaging.DefaultInstance.UnsubscribeFromTopicAsync(new[] { model.FcmToken.Trim() }, topic);
+                }
+                await _authService.SetFcmNotificationPreferenceAsync(username, false);
+                return Ok(new { success = true });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Không tắt được FCM topic {Topic} cho {Username}.", topic, username);
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Không thể tắt thông báo lúc này." });
+            }
+        }
+
         private static string BuildPendingTicketTopic(string username)
         {
             return "phieu_nguy_co_ton_" + username.Trim().ToLowerInvariant().Replace('.', '_');
+        }
+
+        private static TException? FindException<TException>(Exception exception)
+            where TException : Exception
+        {
+            for (Exception? current = exception; current is not null; current = current.InnerException)
+            {
+                if (current is TException matched) return matched;
+            }
+
+            return null;
         }
 
 

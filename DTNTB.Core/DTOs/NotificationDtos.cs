@@ -58,6 +58,7 @@ namespace DTNTB.Core.DTOs
     public class NotificationSendResultDto
     {
         public bool Success { get; set; }
+        public bool Skipped { get; set; }
         public string Message { get; set; } = string.Empty;
         public string FirebaseMessageId { get; set; } = string.Empty;
     }

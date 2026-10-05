@@ -125,6 +125,13 @@ public sealed class FcmNotificationWorker : BackgroundService
                     throw new InvalidOperationException(result.Message);
                 }
 
+                if (result.Skipped)
+                {
+                    await CompleteNotificationAuditAsync(connection, username, "SKIPPED", null, result.Message);
+                    _logger.LogInformation("Bỏ qua thông báo phiếu tồn cho {Username}: {Message}", username, result.Message);
+                    continue;
+                }
+
                 await CompleteNotificationAuditAsync(connection, username, "SENT", result.FirebaseMessageId, null);
                 _logger.LogInformation(
                     "Đã gửi nhắc phiếu tồn cho {Username}; số phiếu: {PendingCount}; Firebase message ID: {MessageId}.",

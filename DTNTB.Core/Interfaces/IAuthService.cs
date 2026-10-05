@@ -11,6 +11,8 @@ namespace DTNTB.Core.Interfaces
         Task<LoginResponseDto> VerifyOtpAsync(VerifyOtpRequestDto request);
         Task<LoginResponseDto> ConvertTokenAsync(TokenConversionRequestDto request);
         Task<LoginResponseDto> DirectLoginAsync(DirectLoginRequestDto request);
+        Task<FcmNotificationPreferenceDto> GetFcmNotificationPreferenceAsync(string username);
+        Task<bool> SetFcmNotificationPreferenceAsync(string username, bool enabled);
         Task<bool> IsAuthorizationStateCurrentAsync(ClaimsPrincipal principal);
 
     }
