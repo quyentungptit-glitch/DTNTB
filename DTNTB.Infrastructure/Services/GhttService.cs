@@ -220,7 +220,13 @@ namespace DTNTB.Infrastructure.Services
                                     TlhtDisplay = (tong > 0) ? string.Format("{0:N2}%", tlht) : "—",
                                     PhanSo = string.Format("{0:N0} / {1:N0}", thuchien, tong),
                                     ColorClass = colorClass,
-                                    BgClass = bgClass
+                                    BgClass = bgClass,
+                                    DonViId = item.Table.Columns.Contains("DONVI_ID") && item["DONVI_ID"] != DBNull.Value
+                                        ? Convert.ToInt64(item["DONVI_ID"])
+                                        : null,
+                                    NhanVienId = item.Table.Columns.Contains("NHANVIEN_ID") && item["NHANVIEN_ID"] != DBNull.Value
+                                        ? Convert.ToInt64(item["NHANVIEN_ID"])
+                                        : null
                                 };
                             }
 
@@ -380,6 +386,109 @@ namespace DTNTB.Infrastructure.Services
             {
                 return "Lỗi hệ thống: " + ex.Message;
             }
+        }
+
+        // 6. DANH SÁCH THUÊ BAO CHƯA GIA HẠN, MỞ TỪ MỘT Ô BÁO CÁO.
+        // Chỉ NVDB có popup chi tiết, khóa bằng NHANVIEN_ID.
+        // Phạm vi cuối cùng luôn do API xác định, không tin nhanvien_id từ client.
+        public async Task<PaginatedResultDto<GhttChuaGiaHanDto>> GetDanhSachChuaGiaHanAsync(GhttChuaGiaHanFilterDto filter, string dataScope, string username)
+        {
+            filter.Page = Math.Max(1, filter.Page);
+            filter.PageSize = Math.Clamp(filter.PageSize, 1, 100);
+
+            var result = new PaginatedResultDto<GhttChuaGiaHanDto>();
+            string loai = filter.Loai?.Trim().ToUpperInvariant() ?? string.Empty;
+            string maCs = filter.MaCs?.Trim().ToUpperInvariant() ?? string.Empty;
+            dataScope = dataScope?.Trim().ToUpperInvariant() ?? "NHAN_VIEN";
+
+            if (maCs is not ("CS1" or "CS2") || loai != "NVDB")
+            {
+                return result;
+            }
+
+            using var conn = new OracleConnection(_connString);
+            await conn.OpenAsync();
+
+            var parameters = new DynamicParameters();
+            parameters.Add("thang", filter.Thang, DbType.Int32);
+            parameters.Add("maCs", maCs, DbType.String);
+            parameters.Add("loai", loai, DbType.String);
+
+            string whereSql = @"
+                FROM ghtt_chuagh_ct a
+                WHERE a.sl_thang = :thang
+                  AND UPPER(TRIM(a.ma_cs)) = :maCs
+                  AND UPPER(TRIM(a.loai)) = :loai";
+
+            if (dataScope is "TOAN_TINH" or "GLOBAL")
+            {
+                // Quản trị toàn tỉnh được xem chi tiết mọi nhân viên.
+                if (!filter.NhanVienId.HasValue || filter.NhanVienId.Value <= 0) return result;
+                whereSql += " AND a.nhanvien_id = :nhanVienId";
+                parameters.Add("nhanVienId", filter.NhanVienId.Value, DbType.Int64);
+            }
+            else if (dataScope == "NHAN_VIEN")
+            {
+                // v_nguoidung_diaban chỉ lưu MA_NV. Bảng v_nguoidung mới là nguồn
+                // có NHANVIEN_ID chính thức để đối chiếu với ô báo cáo và bảng chi tiết.
+                // Không tự thay id client gửi lên để tránh bấm nhân viên khác nhưng lại
+                // hiển thị nhầm danh sách của chính mình.
+                if (!filter.NhanVienId.HasValue || filter.NhanVienId.Value <= 0)
+                {
+                    throw new UnauthorizedAccessException("Bạn không có quyền xem danh sách của nhân viên khác.");
+                }
+
+                long? ownNhanVienId = await conn.QueryFirstOrDefaultAsync<long?>(
+                    @"SELECT nhanvien_id
+                      FROM v_nguoidung
+                      WHERE UPPER(TRIM(ma_nd)) = UPPER(TRIM(:username))
+                        AND nhanvien_id IS NOT NULL
+                        AND ROWNUM = 1",
+                    new { username });
+
+                if (!ownNhanVienId.HasValue || ownNhanVienId.Value != filter.NhanVienId.Value)
+                {
+                    throw new UnauthorizedAccessException("Bạn không có quyền xem danh sách của nhân viên khác.");
+                }
+
+                whereSql += " AND a.nhanvien_id = :nhanVienId";
+                parameters.Add("nhanVienId", filter.NhanVienId.Value, DbType.Int64);
+            }
+            else
+            {
+                // Lãnh đạo địa bàn, đơn vị và tổ quản lý không được mở danh sách chi tiết.
+                throw new UnauthorizedAccessException("Bạn không có quyền xem danh sách thuê bao chưa gia hạn.");
+            }
+
+            result.TotalCount = await conn.ExecuteScalarAsync<int>("SELECT COUNT(1)" + whereSql, parameters);
+            if (result.TotalCount == 0) return result;
+
+            parameters.Add("startRow", (filter.Page - 1) * filter.PageSize + 1, DbType.Int32);
+            parameters.Add("endRow", filter.Page * filter.PageSize, DbType.Int32);
+
+            string query = @"
+                SELECT * FROM (
+                    SELECT q.*, ROWNUM AS row_num FROM (
+                        SELECT a.loai AS Loai,
+                               a.ma_cs AS MaCs,
+                               a.donvi_id AS DonViId,
+                               a.ten_dv AS TenDv,
+                               a.ma_tb AS MaTb,
+                               a.ten_kh AS TenKh,
+                               a.sdt_kh AS SdtKh,
+                               a.diachi_kh AS DiaChiKh,
+                               a.loaihinh_tb AS LoaiHinhTb,
+                               CAST(a.ngay_ktdc AS VARCHAR2(30)) AS NgayKtdc,
+                               a.nhanvien_id AS NhanVienId,
+                               a.ma_nv AS MaNv,
+                               a.ten_nv AS TenNv
+                        " + whereSql + @"
+                        ORDER BY a.ten_kh, a.ma_tb
+                    ) q WHERE ROWNUM <= :endRow
+                ) WHERE row_num >= :startRow";
+
+            result.Items = (await conn.QueryAsync<GhttChuaGiaHanDto>(query, parameters)).ToList();
+            return result;
         }
 
         // ==========================================

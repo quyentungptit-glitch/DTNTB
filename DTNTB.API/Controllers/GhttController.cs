@@ -121,5 +121,25 @@ namespace DTNTB.API.Controllers
 
             return Ok(new { success = true, message });
         }
+
+        // 6. CHI TIẾT THUÊ BAO CHƯA GIA HẠN TỪ Ô BÁO CÁO
+        [HttpGet("chua-gia-han")]
+        [Authorize(Policy = AppPermissions.GHTT.VIEW)]
+        public async Task<IActionResult> GetDanhSachChuaGiaHan([FromQuery] GhttChuaGiaHanFilterDto filter)
+        {
+            string dataScope = User.FindFirst("data_scope")?.Value?.ToUpper().Trim() ?? "NHAN_VIEN";
+            string username = GetCurrentUserId();
+            // Chi tiết được khóa tại service bằng scope và tài khoản đăng nhập;
+            // không có trường hợp ALL mở danh sách tổng hợp.
+            try
+            {
+                var result = await _ghttService.GetDanhSachChuaGiaHanAsync(filter, dataScope, username);
+                return Ok(result);
+            }
+            catch (System.UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message });
+            }
+        }
     }
 }

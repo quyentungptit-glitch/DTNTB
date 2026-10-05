@@ -88,7 +88,5 @@ namespace DTNTB.Core.DTOs
     {
         [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(4096)]
         public string FcmToken { get; set; } = string.Empty;
-        [System.ComponentModel.DataAnnotations.StringLength(50)]
-        public string DeviceType { get; set; } = string.Empty;
     }
 }

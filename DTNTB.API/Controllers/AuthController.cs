@@ -1,5 +1,7 @@
 ﻿using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
+using FirebaseAdmin.Messaging;
+using Google.Apis.Auth.OAuth2.Responses;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -12,10 +14,12 @@ namespace DTNTB.API.Controllers
     public class AuthController : ControllerBase
     {
         private readonly IAuthService _authService;
+        private readonly ILogger<AuthController> _logger;
 
-        public AuthController(IAuthService authService)
+        public AuthController(IAuthService authService, ILogger<AuthController> logger)
         {
             _authService = authService;
+            _logger = logger;
         }
 
         [HttpPost("login")]
@@ -126,27 +130,76 @@ namespace DTNTB.API.Controllers
         }
 
 
-        // API 5: TIẾP NHẬN ĐĂNG KÝ TOKEN THIẾT BỊ TỪ ĐIỆN THOẠI DI ĐỘNG (YÊU CẦU ĐÃ ĐĂNG NHẬP) [INDEX]
-        //[Authorize]
-        //[HttpPost("register-fcm-token")]
-        //public async Task<IActionResult> RegisterFcmToken([FromBody] RegisterFcmTokenDto model)
-        //{
-        //    // Trích xuất username an toàn từ JWT Token của người gửi
-        //    string username = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "";
+        // Token thiết bị chỉ được dùng tức thời để Firebase subscribe vào topic.
+        // Không lưu token tại CSDL: worker gửi hoàn toàn theo Firebase Topic.
+        [Authorize]
+        [HttpPost("register-fcm-token")]
+        public async Task<IActionResult> RegisterFcmToken([FromBody] RegisterFcmTokenDto model)
+        {
+            string username = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(username) || model == null || string.IsNullOrWhiteSpace(model.FcmToken))
+            {
+                return BadRequest(new { message = "Dữ liệu đăng ký token không hợp lệ." });
+            }
 
-        //    if (string.IsNullOrEmpty(username) || model == null || string.IsNullOrEmpty(model.FcmToken))
-        //    {
-        //        return BadRequest(new { message = "Dữ liệu đăng ký Token không hợp lệ." });
-        //    }
+            string topic = BuildPendingTicketTopic(username);
+            try
+            {
+                await FirebaseMessaging.DefaultInstance.SubscribeToTopicAsync(new[] { model.FcmToken.Trim() }, topic);
+                return Ok(new { success = true, topic, message = "Đã bật thông báo trên thiết bị này." });
+            }
+            catch (TokenResponseException ex)
+            {
+                // Lỗi này xảy ra trước khi FCM xử lý token thiết bị: service account
+                // không đổi được JWT sang OAuth access token tại Google.
+                _logger.LogError(ex,
+                    "Firebase service account không lấy được OAuth token khi subscribe topic {Topic} cho {Username}.",
+                    topic, username);
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                {
+                    message = "Máy chủ Firebase chưa xác thực được service account. " +
+                              "Hãy kiểm tra khóa service account và thời gian máy chủ."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Không subscribe được FCM token vào topic {Topic} cho {Username}.", topic, username);
+                var errorCode = ex is FirebaseMessagingException firebaseException
+                    ? firebaseException.MessagingErrorCode.ToString()
+                    : ex.GetType().Name;
+                return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    new { message = $"Firebase chưa subscribe được topic (mã: {errorCode})." });
+            }
+        }
 
-        //    var success = await _authService.RegisterFcmTokenAsync(username, model);
-        //    if (!success)
-        //    {
-        //        return BadRequest(new { message = "Không thể ghi nhận thiết bị này trên cơ sở dữ liệu." });
-        //    }
+        [Authorize]
+        [HttpPost("unregister-fcm-token")]
+        public async Task<IActionResult> UnregisterFcmToken([FromBody] RegisterFcmTokenDto model)
+        {
+            string username = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(username) || model == null || string.IsNullOrWhiteSpace(model.FcmToken))
+            {
+                return BadRequest(new { message = "Dữ liệu hủy token không hợp lệ." });
+            }
 
-        //    return Ok(new { success = true, message = "Đăng ký Token thiết bị nhận thông báo thành công." });
-        //}
+            string topic = BuildPendingTicketTopic(username);
+            try
+            {
+                await FirebaseMessaging.DefaultInstance.UnsubscribeFromTopicAsync(new[] { model.FcmToken.Trim() }, topic);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Không unsubscribe được FCM token khỏi topic {Topic} cho {Username}.", topic, username);
+                // Không có dữ liệu token cục bộ cần xử lý; việc hủy topic được Firebase quản lý.
+            }
+
+            return Ok(new { success = true });
+        }
+
+        private static string BuildPendingTicketTopic(string username)
+        {
+            return "phieu_nguy_co_ton_" + username.Trim().ToLowerInvariant().Replace('.', '_');
+        }
 
 
         // API TEST: BẮN THỬ THÔNG BÁO PUSH LÊN TOPIC NGAY LẬP TỨC ĐỂ KIỂM TRA ĐƯỜNG TRUYỀN GOOGLE [INDEX]

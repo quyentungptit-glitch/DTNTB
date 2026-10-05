@@ -17,6 +17,9 @@ namespace DTNTB.Core.DTOs
         public string PhanSo { get; set; } = "0 / 0";   // Hiển thị "Thực hiện / Tổng"
         public string ColorClass { get; set; } = string.Empty; // text-success, text-warning, text-danger-bold
         public string BgClass { get; set; } = string.Empty;    // bg-light-green, bg-light-red
+        // Khóa của cột báo cáo, dùng để mở đúng dữ liệu chi tiết.
+        public long? DonViId { get; set; }
+        public long? NhanVienId { get; set; }
     }
 
     // Một hàng chỉ số (Row) sau khi Pivot
@@ -44,4 +47,36 @@ namespace DTNTB.Core.DTOs
         [Range(200001, 209912, ErrorMessage = "Tháng phải có định dạng yyyyMM")]
         public int Thang { get; set; }
     }
+
+    public class GhttChuaGiaHanDto
+    {
+        public string Loai { get; set; } = string.Empty;
+        public string MaCs { get; set; } = string.Empty;
+        public long? DonViId { get; set; }
+        public string TenDv { get; set; } = string.Empty;
+        public string MaTb { get; set; } = string.Empty;
+        public string TenKh { get; set; } = string.Empty;
+        public string SdtKh { get; set; } = string.Empty;
+        public string DiaChiKh { get; set; } = string.Empty;
+        public string LoaiHinhTb { get; set; } = string.Empty;
+        public string NgayKtdc { get; set; } = string.Empty;
+        public long? NhanVienId { get; set; }
+        public string MaNv { get; set; } = string.Empty;
+        public string TenNv { get; set; } = string.Empty;
+    }
+
+    public class GhttChuaGiaHanFilterDto
+    {
+        [Required]
+        public int Thang { get; set; }
+        [Required]
+        public string MaCs { get; set; } = string.Empty;
+        [Required]
+        public string Loai { get; set; } = string.Empty;
+        public long? DonViId { get; set; }
+        public long? NhanVienId { get; set; }
+        public int Page { get; set; } = 1;
+        public int PageSize { get; set; } = 20;
+    }
+
 }

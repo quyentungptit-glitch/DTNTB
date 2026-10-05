@@ -13,7 +13,5 @@ namespace DTNTB.Core.Interfaces
         Task<LoginResponseDto> DirectLoginAsync(DirectLoginRequestDto request);
         Task<bool> IsAuthorizationStateCurrentAsync(ClaimsPrincipal principal);
 
-        // Đăng ký Token thiết bị FCM
-        Task<bool> RegisterFcmTokenAsync(string username, RegisterFcmTokenDto request);
     }
 }

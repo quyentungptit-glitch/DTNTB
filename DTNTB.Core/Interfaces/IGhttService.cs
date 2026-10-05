@@ -11,5 +11,6 @@ namespace DTNTB.Core.Interfaces
         Task<byte[]> ExportExcelGhttAsync(int thang, int donvi, string loaiDv, string dataScope = "TOAN_TINH", string username = "");
         Task<bool> TongHopSoLieuAsync(int thang, string nguoiCn);
         Task<string> ChotSoLieuAsync(int thang, string nguoiCn);
+        Task<PaginatedResultDto<GhttChuaGiaHanDto>> GetDanhSachChuaGiaHanAsync(GhttChuaGiaHanFilterDto filter, string dataScope, string username);
     }
 }

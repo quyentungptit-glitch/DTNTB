@@ -575,43 +575,5 @@ namespace DTNTB.Infrastructure.Services
                 && tokenPermissions.SetEquals(currentPermissions);
         }
 
-        public async Task<bool> RegisterFcmTokenAsync(string username, RegisterFcmTokenDto request)
-        {
-            using (var conn = new OracleConnection(_connString))
-            {
-                string query = @"
-                    MERGE INTO brcd_dhgh_fcm_tokens target
-                    USING (
-                        SELECT :username as username, :fcm_token as fcm_token, :device_type as device_type 
-                        FROM dual
-                    ) source
-                    ON (target.fcm_token = source.fcm_token)
-                    WHEN MATCHED THEN
-                        UPDATE SET 
-                            target.username = source.username, 
-                            target.device_type = source.device_type,
-                            target.ngay_cap_nhat = SYSDATE
-                    WHEN NOT MATCHED THEN
-                        INSERT (username, fcm_token, device_type, ngay_cap_nhat)
-                        VALUES (source.username, source.fcm_token, source.device_type, SYSDATE)";
-
-                try
-                {
-                    await conn.OpenAsync();
-                    await conn.ExecuteAsync(query, new
-                    {
-                        username = username.Trim().ToLower(),
-                        fcm_token = request.FcmToken.Trim(),
-                        device_type = request.DeviceType?.Trim() ?? "Android"
-                    });
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine("Lỗi ghi nhận Token thiết bị: " + ex.Message);
-                    return false;
-                }
-            }
-        }
     }
 }

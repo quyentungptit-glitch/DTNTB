@@ -8,6 +8,7 @@ using ClosedXML.Excel;
 using DTNTB.Core.Constants;
 using DTNTB.Core.DTOs;
 using DTNTB.Core.Interfaces;
+using FirebaseAdmin.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Oracle.ManagedDataAccess.Client;
@@ -346,7 +347,8 @@ namespace DTNTB.Infrastructure.Services
                 {
                     await SendTelegramGiaoPhieuAsync(conn, maNvKt, tenNvKt, maTb, tenTb, diemTinNhiem, tenDv,
                         dTgsd, dDadv, dTttt, dTbi, dSuyhao, dLos, dBhll, dKohl, dTgsc, ghiChu);
-                    return (true, "Đã giao phiếu và gửi thông báo Telegram thành công.");
+                    await SendFcmGiaoPhieuAsync(conn, maNvKt, maTb, tenTb, diemTinNhiem, ghiChu);
+                    return (true, "Đã giao phiếu và gửi thông báo đến nhân viên.");
                 }
             }
 
@@ -413,6 +415,7 @@ namespace DTNTB.Infrastructure.Services
                 WHERE phieu_id = :phieu_id AND trangthai_phieu = 0";
 
             int success = 0;
+            var assignedByEmployee = new Dictionary<string, (string TenNv, int Count)>(StringComparer.OrdinalIgnoreCase);
             using var cmdUpd = new OracleCommand(sqlUpdate, conn);
             cmdUpd.BindByName = true;
             cmdUpd.Parameters.Add("ma_nv_giao", OracleDbType.Varchar2).Value = maNvGiao;
@@ -428,10 +431,108 @@ namespace DTNTB.Infrastructure.Services
                     success++;
                     await SendTelegramGiaoPhieuAsync(conn, p.MaNvkt, p.TenNvkt, p.MaTb, p.TenTb, p.DiemTinNhiem, p.TenDv,
                         p.DiemTgsd, p.DiemDadv, p.DiemTttt, p.DiemTbi, p.DiemSuyhao, p.DiemOfflos, p.DiemBhll, p.DiemKohl, p.DiemTgsc, ghiChuChung);
+                    var current = assignedByEmployee.GetValueOrDefault(p.MaNvkt);
+                    assignedByEmployee[p.MaNvkt] = (p.TenNvkt, current.Count + 1);
                 }
             }
 
-            return (success, $"Đã giao thành công {success} phiếu và gửi thông báo Telegram đến nhân viên kỹ thuật phụ trách.");
+            foreach (var item in assignedByEmployee)
+            {
+                await SendFcmGiaoNhieuPhieuAsync(conn, item.Key, item.Value.TenNv, item.Value.Count, ghiChuChung);
+            }
+
+            return (success, $"Đã giao thành công {success} phiếu và gửi thông báo đến nhân viên kỹ thuật phụ trách.");
+        }
+
+        private async Task SendFcmGiaoPhieuAsync(
+            OracleConnection conn, string maNvKt, string maTb, string tenTb, int diemTinNhiem, string? ghiChuGiao)
+        {
+            string username = await GetUsernameByEmployeeCodeAsync(conn, maNvKt);
+            if (string.IsNullOrWhiteSpace(username)) return;
+
+            try
+            {
+                var message = new Message
+                {
+                    Topic = BuildPendingTicketTopic(username),
+                    Notification = new Notification
+                    {
+                        Title = "🔔 BẠN CÓ PHIẾU MỚI",
+                        Body = $"Thuê bao {maTb} - {tenTb}. Điểm nguy cơ: {diemTinNhiem}."
+                    },
+                    Data = new Dictionary<string, string>
+                    {
+                        ["route"] = "/nguycotb/view",
+                        ["notification_type"] = "ASSIGNED_TICKET",
+                        ["ma_tb"] = maTb ?? string.Empty,
+                        ["ghi_chu_giao"] = ghiChuGiao ?? string.Empty
+                    }
+                };
+
+                await FirebaseMessaging.DefaultInstance.SendAsync(message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Không gửi được FCM giao phiếu cho nhân viên {MaNvKt}.", maNvKt);
+            }
+        }
+
+        private async Task SendFcmGiaoNhieuPhieuAsync(
+            OracleConnection conn, string maNvKt, string tenNvKt, int count, string? ghiChuGiao)
+        {
+            string username = await GetUsernameByEmployeeCodeAsync(conn, maNvKt);
+            if (string.IsNullOrWhiteSpace(username)) return;
+
+            try
+            {
+                var message = new Message
+                {
+                    Topic = BuildPendingTicketTopic(username),
+                    Notification = new Notification
+                    {
+                        Title = "🔔 BẠN CÓ PHIẾU MỚI",
+                        Body = $"Bạn được giao {count} phiếu mới. Vui lòng vào danh sách để xử lý."
+                    },
+                    Data = new Dictionary<string, string>
+                    {
+                        ["route"] = "/nguycotb/view",
+                        ["notification_type"] = "ASSIGNED_TICKETS",
+                        ["assigned_count"] = count.ToString(),
+                        ["ghi_chu_giao"] = ghiChuGiao ?? string.Empty
+                    }
+                };
+
+                await FirebaseMessaging.DefaultInstance.SendAsync(message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Không gửi được FCM giao {Count} phiếu cho nhân viên {MaNvKt} ({TenNvKt}).", count, maNvKt, tenNvKt);
+            }
+        }
+
+        private static async Task<string> GetUsernameByEmployeeCodeAsync(OracleConnection conn, string maNvKt)
+        {
+            if (string.IsNullOrWhiteSpace(maNvKt)) return string.Empty;
+
+            const string query = @"
+                SELECT LOWER(TRIM(nd.ma_nd))
+                FROM v_nhanvien nv
+                INNER JOIN v_nguoidung nd
+                    ON nv.nhanvien_id = nd.nhanvien_id
+                   AND nv.phanvung_id = nd.phanvung_id
+                WHERE UPPER(TRIM(nv.ma_nv)) = UPPER(TRIM(:ma_nv))
+                  AND nd.trangthai = 1
+                  AND ROWNUM = 1";
+
+            using var command = new OracleCommand(query, conn) { BindByName = true };
+            command.Parameters.Add("ma_nv", OracleDbType.Varchar2).Value = maNvKt.Trim();
+            var value = await command.ExecuteScalarAsync();
+            return value?.ToString()?.Trim() ?? string.Empty;
+        }
+
+        private static string BuildPendingTicketTopic(string username)
+        {
+            return "phieu_nguy_co_ton_" + username.Trim().ToLowerInvariant().Replace('.', '_');
         }
 
         private async Task SendTelegramGiaoPhieuAsync(
