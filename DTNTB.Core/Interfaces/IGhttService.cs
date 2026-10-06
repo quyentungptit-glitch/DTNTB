@@ -12,5 +12,6 @@ namespace DTNTB.Core.Interfaces
         Task<bool> TongHopSoLieuAsync(int thang, string nguoiCn);
         Task<string> ChotSoLieuAsync(int thang, string nguoiCn);
         Task<PaginatedResultDto<GhttChuaGiaHanDto>> GetDanhSachChuaGiaHanAsync(GhttChuaGiaHanFilterDto filter, string dataScope, string username);
+        Task<byte[]> ExportDanhSachChuaGiaHanAsync(GhttChuaGiaHanFilterDto filter, string dataScope, string username);
     }
 }

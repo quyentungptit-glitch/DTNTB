@@ -141,5 +141,23 @@ namespace DTNTB.API.Controllers
                 return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message });
             }
         }
+
+        [HttpGet("chua-gia-han/export")]
+        [Authorize(Policy = AppPermissions.GHTT.EXPORT)]
+        public async Task<IActionResult> ExportDanhSachChuaGiaHan([FromQuery] GhttChuaGiaHanFilterDto filter)
+        {
+            string dataScope = User.FindFirst("data_scope")?.Value?.ToUpper().Trim() ?? "NHAN_VIEN";
+            string username = GetCurrentUserId();
+            try
+            {
+                var fileBytes = await _ghttService.ExportDanhSachChuaGiaHanAsync(filter, dataScope, username);
+                var fileName = $"DanhSachChuaGiaHan_{filter.MaCs?.Trim().ToUpperInvariant()}_{filter.Thang}.xlsx";
+                return File(fileBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+            }
+            catch (System.UnauthorizedAccessException ex)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { message = ex.Message });
+            }
+        }
     }
 }

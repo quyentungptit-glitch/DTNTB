@@ -21,6 +21,42 @@ namespace DTNTB.API.Controllers
             _notificationService = notificationService;
         }
 
+        private string? CurrentUsername() => User.FindFirst(ClaimTypes.NameIdentifier)?.Value?.Trim();
+
+        [HttpGet("mine")]
+        public async Task<IActionResult> GetMine([FromQuery] bool unreadOnly = false, [FromQuery] int page = 1, [FromQuery] int pageSize = 10)
+        {
+            var username = CurrentUsername();
+            if (string.IsNullOrWhiteSpace(username)) return Unauthorized();
+            return Ok(await _notificationService.GetUserNotificationsAsync(username, unreadOnly, page, pageSize));
+        }
+
+        [HttpGet("unread-count")]
+        public async Task<IActionResult> GetUnreadCount()
+        {
+            var username = CurrentUsername();
+            if (string.IsNullOrWhiteSpace(username)) return Unauthorized();
+            return Ok(new { count = await _notificationService.GetUnreadNotificationCountAsync(username) });
+        }
+
+        [HttpPut("{notificationId:long}/read")]
+        public async Task<IActionResult> MarkRead(long notificationId)
+        {
+            var username = CurrentUsername();
+            if (string.IsNullOrWhiteSpace(username)) return Unauthorized();
+            await _notificationService.MarkNotificationReadAsync(username, notificationId);
+            return Ok(new { success = true });
+        }
+
+        [HttpPut("read-all")]
+        public async Task<IActionResult> MarkAllRead()
+        {
+            var username = CurrentUsername();
+            if (string.IsNullOrWhiteSpace(username)) return Unauthorized();
+            await _notificationService.MarkAllNotificationsReadAsync(username);
+            return Ok(new { success = true });
+        }
+
         [HttpGet("settings")]
         [Authorize(Policy = AppPermissions.THONGBAO.VIEW)]
         public async Task<IActionResult> GetSettings()

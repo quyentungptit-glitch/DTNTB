@@ -62,4 +62,22 @@ namespace DTNTB.Core.DTOs
         public string Message { get; set; } = string.Empty;
         public string FirebaseMessageId { get; set; } = string.Empty;
     }
+
+    public class UserNotificationDto
+    {
+        public long NotificationId { get; set; }
+        public string NotificationType { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Body { get; set; } = string.Empty;
+        public string Route { get; set; } = string.Empty;
+        public bool IsRead { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
+
+    public class UserNotificationPageDto
+    {
+        public List<UserNotificationDto> Items { get; set; } = new();
+        public int TotalCount { get; set; }
+        public int UnreadCount { get; set; }
+    }
 }

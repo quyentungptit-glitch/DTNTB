@@ -389,8 +389,8 @@ namespace DTNTB.Infrastructure.Services
         }
 
         // 6. DANH SÁCH THUÊ BAO CHƯA GIA HẠN, MỞ TỪ MỘT Ô BÁO CÁO.
-        // Chỉ NVDB có popup chi tiết, khóa bằng NHANVIEN_ID.
-        // Phạm vi cuối cùng luôn do API xác định, không tin nhanvien_id từ client.
+        // NVDB khóa theo NHANVIEN_ID; TTVT/PBH khóa theo DONVI_ID.
+        // Phạm vi cuối cùng luôn do API xác định, không tin id từ client.
         public async Task<PaginatedResultDto<GhttChuaGiaHanDto>> GetDanhSachChuaGiaHanAsync(GhttChuaGiaHanFilterDto filter, string dataScope, string username)
         {
             filter.Page = Math.Max(1, filter.Page);
@@ -401,7 +401,7 @@ namespace DTNTB.Infrastructure.Services
             string maCs = filter.MaCs?.Trim().ToUpperInvariant() ?? string.Empty;
             dataScope = dataScope?.Trim().ToUpperInvariant() ?? "NHAN_VIEN";
 
-            if (maCs is not ("CS1" or "CS2") || loai != "NVDB")
+            if (maCs is not ("CS1" or "CS2") || loai is not ("NVDB" or "TTVT" or "PBH"))
             {
                 return result;
             }
@@ -422,10 +422,19 @@ namespace DTNTB.Infrastructure.Services
 
             if (dataScope is "TOAN_TINH" or "GLOBAL")
             {
-                // Quản trị toàn tỉnh được xem chi tiết mọi nhân viên.
-                if (!filter.NhanVienId.HasValue || filter.NhanVienId.Value <= 0) return result;
-                whereSql += " AND a.nhanvien_id = :nhanVienId";
-                parameters.Add("nhanVienId", filter.NhanVienId.Value, DbType.Int64);
+                // Quản trị toàn tỉnh được xem chi tiết mọi nhân viên/đơn vị.
+                if (loai == "NVDB")
+                {
+                    if (!filter.NhanVienId.HasValue || filter.NhanVienId.Value <= 0) return result;
+                    whereSql += " AND a.nhanvien_id = :nhanVienId";
+                    parameters.Add("nhanVienId", filter.NhanVienId.Value, DbType.Int64);
+                }
+                else
+                {
+                    if (!filter.DonViId.HasValue || filter.DonViId.Value <= 0) return result;
+                    whereSql += " AND a.donvi_id = :donViId";
+                    parameters.Add("donViId", filter.DonViId.Value, DbType.Int64);
+                }
             }
             else if (dataScope == "NHAN_VIEN")
             {
@@ -454,9 +463,24 @@ namespace DTNTB.Infrastructure.Services
                 whereSql += " AND a.nhanvien_id = :nhanVienId";
                 parameters.Add("nhanVienId", filter.NhanVienId.Value, DbType.Int64);
             }
+            else if (loai is "TTVT" or "PBH")
+            {
+                if (!filter.DonViId.HasValue || filter.DonViId.Value <= 0)
+                {
+                    throw new UnauthorizedAccessException("Bạn không có quyền xem danh sách của đơn vị này.");
+                }
+
+                var ownDonViId = await GetUserDonViIdAsync(username);
+                if (ownDonViId <= 0 || ownDonViId != filter.DonViId.Value)
+                {
+                    throw new UnauthorizedAccessException("Bạn không được phép xem danh sách của đơn vị khác.");
+                }
+
+                whereSql += " AND a.donvi_id = :donViId";
+                parameters.Add("donViId", filter.DonViId.Value, DbType.Int64);
+            }
             else
             {
-                // Lãnh đạo địa bàn, đơn vị và tổ quản lý không được mở danh sách chi tiết.
                 throw new UnauthorizedAccessException("Bạn không có quyền xem danh sách thuê bao chưa gia hạn.");
             }
 
@@ -489,6 +513,72 @@ namespace DTNTB.Infrastructure.Services
 
             result.Items = (await conn.QueryAsync<GhttChuaGiaHanDto>(query, parameters)).ToList();
             return result;
+        }
+
+        public async Task<byte[]> ExportDanhSachChuaGiaHanAsync(GhttChuaGiaHanFilterDto filter, string dataScope, string username)
+        {
+            filter.Page = 1;
+            filter.PageSize = 100;
+            var firstPage = await GetDanhSachChuaGiaHanAsync(filter, dataScope, username);
+            var items = new List<GhttChuaGiaHanDto>(firstPage.Items);
+            var totalPages = Math.Max(1, (int)Math.Ceiling(firstPage.TotalCount / (double)filter.PageSize));
+
+            for (var page = 2; page <= totalPages; page++)
+            {
+                filter.Page = page;
+                var nextPage = await GetDanhSachChuaGiaHanAsync(filter, dataScope, username);
+                items.AddRange(nextPage.Items);
+            }
+
+            using var workbook = new XLWorkbook();
+            var worksheet = workbook.Worksheets.Add("ChuaGiaHan");
+            worksheet.Cell(1, 1).Value = "DANH SÁCH THUÊ BAO CHƯA GIA HẠN";
+            worksheet.Range(1, 1, 1, 9).Merge();
+            worksheet.Cell(1, 1).Style.Font.Bold = true;
+            worksheet.Cell(1, 1).Style.Font.FontSize = 14;
+            worksheet.Cell(1, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+
+            worksheet.Cell(2, 1).Value = $"Chỉ số: {filter.MaCs?.Trim().ToUpperInvariant()} | Tháng: {filter.Thang}";
+            worksheet.Range(2, 1, 2, 9).Merge();
+            worksheet.Cell(2, 1).Style.Font.Italic = true;
+
+            var headers = new[] { "STT", "Mã thuê bao", "Tên khách hàng", "Số điện thoại", "Địa chỉ lắp đặt", "Loại hình", "Hạn kết thúc", "Mã NV", "Nhân viên" };
+            for (var column = 0; column < headers.Length; column++)
+            {
+                worksheet.Cell(4, column + 1).Value = headers[column];
+            }
+
+            var headerRange = worksheet.Range(4, 1, 4, headers.Length);
+            headerRange.Style.Font.Bold = true;
+            headerRange.Style.Font.FontColor = XLColor.White;
+            headerRange.Style.Fill.BackgroundColor = XLColor.FromHtml("123E66");
+            headerRange.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+
+            for (var index = 0; index < items.Count; index++)
+            {
+                var item = items[index];
+                var row = index + 5;
+                worksheet.Cell(row, 1).Value = index + 1;
+                worksheet.Cell(row, 2).Value = item.MaTb;
+                worksheet.Cell(row, 3).Value = item.TenKh;
+                worksheet.Cell(row, 4).Value = item.SdtKh;
+                worksheet.Cell(row, 5).Value = item.DiaChiKh;
+                worksheet.Cell(row, 6).Value = item.LoaiHinhTb;
+                worksheet.Cell(row, 7).Value = item.NgayKtdc;
+                worksheet.Cell(row, 8).Value = item.MaNv;
+                worksheet.Cell(row, 9).Value = item.TenNv;
+            }
+
+            var usedRange = worksheet.Range(4, 1, Math.Max(4, items.Count + 4), headers.Length);
+            usedRange.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+            usedRange.Style.Border.InsideBorder = XLBorderStyleValues.Thin;
+            worksheet.SheetView.FreezeRows(4);
+            worksheet.Columns().AdjustToContents();
+            worksheet.Column(5).Width = Math.Min(60, Math.Max(25, worksheet.Column(5).Width));
+
+            await using var stream = new MemoryStream();
+            workbook.SaveAs(stream);
+            return stream.ToArray();
         }
 
         // ==========================================

@@ -122,6 +122,51 @@ namespace DTNTB.Infrastructure.Services
                 },
                 sentBy);
 
+        public async Task<UserNotificationPageDto> GetUserNotificationsAsync(string username, bool unreadOnly, int page, int pageSize)
+        {
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 50);
+            var normalizedUsername = username.Trim().ToLowerInvariant();
+            var offset = (page - 1) * pageSize;
+            var upperBound = offset + pageSize;
+            var filter = unreadOnly ? " AND is_read = 0" : string.Empty;
+
+            await using var conn = new OracleConnection(_connectionString);
+            var total = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(1) FROM dtntb_user_notifications WHERE username = :username{filter}", new { username = normalizedUsername });
+            var unread = await conn.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM dtntb_user_notifications WHERE username = :username AND is_read = 0", new { username = normalizedUsername });
+            var items = (await conn.QueryAsync<UserNotificationDto>($@"
+                SELECT notification_id AS NotificationId, notification_type AS NotificationType,
+                       title AS Title, message_body AS Body, route AS Route,
+                       is_read AS IsRead, created_at AS CreatedAt
+                FROM (
+                    SELECT n.*, ROW_NUMBER() OVER (ORDER BY n.created_at DESC, n.notification_id DESC) AS row_num
+                    FROM dtntb_user_notifications n
+                    WHERE n.username = :username{filter}
+                ) WHERE row_num > :offset AND row_num <= :upperBound
+                ORDER BY row_num", new { username = normalizedUsername, offset, upperBound })).ToList();
+            return new UserNotificationPageDto { Items = items, TotalCount = total, UnreadCount = unread };
+        }
+
+        public async Task<int> GetUnreadNotificationCountAsync(string username)
+        {
+            await using var conn = new OracleConnection(_connectionString);
+            return await conn.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM dtntb_user_notifications WHERE username = :username AND is_read = 0", new { username = username.Trim().ToLowerInvariant() });
+        }
+
+        public async Task MarkNotificationReadAsync(string username, long notificationId)
+        {
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.ExecuteAsync(@"UPDATE dtntb_user_notifications SET is_read = 1, read_at = SYSDATE
+                WHERE notification_id = :notificationId AND username = :username", new { notificationId, username = username.Trim().ToLowerInvariant() });
+        }
+
+        public async Task MarkAllNotificationsReadAsync(string username)
+        {
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.ExecuteAsync(@"UPDATE dtntb_user_notifications SET is_read = 1, read_at = SYSDATE
+                WHERE username = :username AND is_read = 0", new { username = username.Trim().ToLowerInvariant() });
+        }
+
         public async Task<NotificationSendResultDto> SendToUsernameAsync(
             string username,
             string notificationType,
@@ -137,6 +182,7 @@ namespace DTNTB.Infrastructure.Services
             }
 
             var topic = BuildPendingTicketTopic(normalizedUsername);
+            await AddUserNotificationAsync(normalizedUsername, notificationType, title, body, data);
             if (!await IsUserFcmEnabledAsync(normalizedUsername))
             {
                 const string skippedMessage = "Người dùng chưa bật nhận thông báo.";
@@ -222,6 +268,32 @@ namespace DTNTB.Infrastructure.Services
             {
                 // Không để lỗi ghi lịch sử làm hỏng nghiệp vụ giao phiếu/nhắc phiếu.
                 _logger.LogWarning(ex, "Không ghi được lịch sử thông báo {NotificationType} cho {Username}.", notificationType, username);
+            }
+        }
+
+        private async Task AddUserNotificationAsync(string username, string notificationType, string title, string body, IReadOnlyDictionary<string, string>? data)
+        {
+            const string sql = @"
+                INSERT INTO dtntb_user_notifications
+                    (notification_id, username, notification_type, title, message_body, route, is_read, created_at)
+                VALUES
+                    (seq_dtntb_user_notifications.NEXTVAL, :username, :notificationType, :title, :body, :route, 0, SYSDATE)";
+            try
+            {
+                await using var conn = new OracleConnection(_connectionString);
+                var route = data is not null && data.TryGetValue("route", out var value) ? value : "/nguycotb/view";
+                await conn.ExecuteAsync(sql, new
+                {
+                    username,
+                    notificationType = notificationType.Trim().ToUpperInvariant(),
+                    title = title.Trim(),
+                    body = body.Trim(),
+                    route = string.IsNullOrWhiteSpace(route) ? "/nguycotb/view" : route
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Không ghi được hộp thư thông báo cho {Username}.", username);
             }
         }
 

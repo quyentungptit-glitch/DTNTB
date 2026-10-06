@@ -10,6 +10,10 @@ namespace DTNTB.Core.Interfaces
         Task<bool> SaveSettingsAsync(NotificationSettingsDto settings, string updatedBy);
         Task<NotificationHistoryPageDto> GetHistoryAsync(int page, int pageSize);
         Task<NotificationSendResultDto> SendTestAsync(SendTestNotificationRequestDto request, string sentBy);
+        Task<UserNotificationPageDto> GetUserNotificationsAsync(string username, bool unreadOnly, int page, int pageSize);
+        Task<int> GetUnreadNotificationCountAsync(string username);
+        Task MarkNotificationReadAsync(string username, long notificationId);
+        Task MarkAllNotificationsReadAsync(string username);
         Task<NotificationSendResultDto> SendToUsernameAsync(
             string username,
             string notificationType,
