@@ -536,7 +536,7 @@ namespace DTNTB.Infrastructure.Services
             var key = Encoding.UTF8.GetBytes(jwtKey);
             if (key.Length < 32)
                 throw new InvalidOperationException("Jwt:Key phải có tối thiểu 32 byte ngẫu nhiên.");
-            var accessTokenMinutes = Math.Clamp(_config.GetValue<int?>("Jwt:AccessTokenMinutes") ?? 30, 5, 60);
+            var accessTokenMinutes = Math.Clamp(_config.GetValue<int?>("Jwt:AccessTokenMinutes") ?? 480, 5, 480);
 
             var claims = new List<Claim>
             {
