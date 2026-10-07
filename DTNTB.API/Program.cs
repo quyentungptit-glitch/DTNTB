@@ -111,6 +111,15 @@ builder.Services.AddHttpClient<IFileStorageService, RemoteFileStorageService>(cl
     client.Timeout = TimeSpan.FromSeconds(60); // Thời gian chờ tối đa khi upload
 });
 
+// Kênh trung gian lấy lương từ hệ thống nội bộ. Base URL và các khóa được
+// lấy từ cấu hình/secret của máy chủ, không đưa xuống ứng dụng bên ngoài.
+builder.Services.AddHttpClient<ITtSalaryService, TtSalaryService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(
+        Math.Clamp(builder.Configuration.GetValue<int?>("TtSalary:TimeoutSeconds") ?? 20, 5, 60));
+    client.MaxResponseContentBufferSize = 1024 * 1024;
+});
+
 // Cấu hình nhận diện Proxy trung gian
 builder.Services.Configure<ForwardedHeadersOptions>(options => // <-- 2. THÊM MỚI
 {
