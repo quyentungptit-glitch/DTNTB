@@ -256,12 +256,17 @@ namespace DTNTB.Infrastructure.Services
         }
 
         // =========================================================================
-        // 3. CHUYỂN ĐỔI TOKEN CŨ -> MỚI (ALLOWLIST BYPASS SSO/OTP)
+        // 3. CHUYỂN ĐỔI TOKEN CŨ -> MỚI (SYSTEM SECRET, KHÔNG GỌI SSO)
         // =========================================================================
         public async Task<LoginResponseDto> ConvertTokenAsync(TokenConversionRequestDto request)
         {
             try
             {
+                if (!IsValidSecretKey(request.SecretKey, "TokenConversion:SecretKey"))
+                {
+                    return new LoginResponseDto { Status = "Error", Message = "Khóa bảo mật đi kèm không chính xác." };
+                }
+
                 var tokenHandler = new JwtSecurityTokenHandler();
                 var legacyKey = _config["LegacyJwt:Key"] ?? _config["Jwt:Key"]
                     ?? throw new InvalidOperationException("LegacyJwt:Key chưa được cấu hình.");
@@ -293,29 +298,7 @@ namespace DTNTB.Infrastructure.Services
                     return new LoginResponseDto { Status = "Error", Message = "Bảo mật lỗi: Tên tài khoản không trùng khớp với chủ sở hữu của Token cũ!" };
                 }
 
-                // Tài khoản allowlist được cấp phiên sau khi token cũ đã được xác thực.
-                if (IsBypassPassword(request.Password))
-                {
-                    return await BuildSuccessfulLoginResponseAsync(request.Username);
-                }
-
-                // Ngược lại, xác thực bình thường qua SSO
-                var loginData = new { username = request.Username, password = request.Password, apiKey = _ssoApiKey };
-                var content = new StringContent(JsonConvert.SerializeObject(loginData), Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync($"{_ssoBaseUrl}loginwithuser", content);
-                var responseBody = await response.Content.ReadAsStringAsync();
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    return new LoginResponseDto { Status = "Error", Message = "Xác thực qua SSO thất bại." };
-                }
-
-                var ssoResult = JsonConvert.DeserializeObject<JObject>(responseBody);
-                if (!IsSsoSuccess(GetSsoValue(ssoResult, "status")))
-                {
-                    return new LoginResponseDto { Status = "Error", Message = "Tài khoản hoặc mật khẩu không chính xác." };
-                }
-
+                // Token cũ và khóa hệ thống đã được xác thực; không xác thực password/SSO.
                 return await BuildSuccessfulLoginResponseAsync(request.Username);
             }
             catch (Exception ex)
@@ -332,12 +315,7 @@ namespace DTNTB.Infrastructure.Services
         {
             try
             {
-                string configuredKey = _config["SystemToSystem:SecretKey"]
-                    ?? throw new InvalidOperationException("SystemToSystem:SecretKey chưa được cấu hình.");
-                var suppliedKeyBytes = Encoding.UTF8.GetBytes(request.SecretKey);
-                var configuredKeyBytes = Encoding.UTF8.GetBytes(configuredKey);
-                if (suppliedKeyBytes.Length != configuredKeyBytes.Length
-                    || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(suppliedKeyBytes, configuredKeyBytes))
+                if (!IsValidSecretKey(request.SecretKey, "SystemToSystem:SecretKey"))
                 {
                     return new LoginResponseDto { Status = "Error", Message = "Khóa bảo mật đi kèm không chính xác." };
                 }
@@ -372,6 +350,16 @@ namespace DTNTB.Infrastructure.Services
                 _logger.LogError(ex, "Đăng nhập trực tiếp thất bại cho tài khoản {Username}", request.Username);
                 return new LoginResponseDto { Status = "Error", Message = "Không thể xử lý đăng nhập lúc này. Vui lòng thử lại." };
             }
+        }
+
+        private bool IsValidSecretKey(string suppliedKey, string configurationKey)
+        {
+            string configuredKey = _config[configurationKey]
+                ?? throw new InvalidOperationException($"{configurationKey} chưa được cấu hình.");
+            var suppliedKeyBytes = Encoding.UTF8.GetBytes(suppliedKey);
+            var configuredKeyBytes = Encoding.UTF8.GetBytes(configuredKey);
+            return suppliedKeyBytes.Length == configuredKeyBytes.Length
+                && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(suppliedKeyBytes, configuredKeyBytes);
         }
 
         public async Task<LoginResponseDto> BuildSuccessfulLoginResponseAsync(string username)

@@ -58,25 +58,25 @@ namespace DTNTB.API.Controllers
             return Ok(response);
         }
 
-        //[HttpPost("convert-token")]
-        //[EnableRateLimiting("auth")]
-        //public async Task<IActionResult> ConvertToken([FromBody] TokenConversionRequestDto model)
-        //{
-        //    if (model == null || string.IsNullOrEmpty(model.Username) ||
-        //        string.IsNullOrEmpty(model.Password) || string.IsNullOrEmpty(model.OldToken))
-        //    {
-        //        return BadRequest(new { message = "Vui lòng truyền đầy đủ tham số yêu cầu." });
-        //    }
+        [HttpPost("convert-token")]
+        [EnableRateLimiting("auth")]
+        public async Task<IActionResult> ConvertToken([FromBody] TokenConversionRequestDto model)
+        {
+            if (model == null || string.IsNullOrEmpty(model.Username) ||
+                string.IsNullOrEmpty(model.OldToken) || string.IsNullOrEmpty(model.SecretKey))
+            {
+                return BadRequest(new { message = "Vui lòng truyền đầy đủ tham số yêu cầu." });
+            }
 
-        //    // Gọi chuyển tiếp nghiệp vụ sang lớp dịch vụ theo đúng chuẩn kiến trúc sạch
-        //    var response = await _authService.ConvertTokenAsync(model);
-        //    if (response.Status == "Error")
-        //    {
-        //        return BadRequest(new { message = response.Message });
-        //    }
+            // Gọi chuyển tiếp nghiệp vụ sang lớp dịch vụ theo đúng chuẩn kiến trúc sạch
+            var response = await _authService.ConvertTokenAsync(model);
+            if (response.Status == "Error")
+            {
+                return BadRequest(new { message = response.Message });
+            }
 
-        //    return Ok(response);
-        //}
+            return Ok(response);
+        }
 
         [HttpPost("direct-login")]
         [EnableRateLimiting("auth")]

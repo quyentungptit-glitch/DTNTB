@@ -53,6 +53,7 @@ foreach (var secretKey in new[]
     "LegacyJwt:Key",
     "Sso:ApiKey",
     "SystemToSystem:SecretKey",
+    "TokenConversion:SecretKey",
     "RemoteStorage:InternalApiKey"
 })
 {

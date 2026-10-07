@@ -463,6 +463,27 @@ namespace DTNTB.Infrastructure.Services
                 whereSql += " AND a.nhanvien_id = :nhanVienId";
                 parameters.Add("nhanVienId", filter.NhanVienId.Value, DbType.Int64);
             }
+            else if (loai == "NVDB" && (dataScope == "DON_VI" || dataScope == "DIA_BAN"))
+            {
+                // Cấp đơn vị/địa bàn chỉ xem được nhân viên thuộc đúng đơn vị của mình.
+                // Luôn dùng đồng thời DONVI_ID và NHANVIEN_ID trong điều kiện truy vấn để
+                // ngăn việc thay đổi id nhân viên từ phía trình duyệt nhằm lấy dữ liệu đơn vị khác.
+                if (!filter.DonViId.HasValue || filter.DonViId.Value <= 0 ||
+                    !filter.NhanVienId.HasValue || filter.NhanVienId.Value <= 0)
+                {
+                    throw new UnauthorizedAccessException("Bạn không có quyền xem danh sách của nhân viên này.");
+                }
+
+                var ownDonViId = await GetUserDonViIdAsync(username);
+                if (ownDonViId <= 0 || ownDonViId != filter.DonViId.Value)
+                {
+                    throw new UnauthorizedAccessException("Bạn không được phép xem danh sách nhân viên của đơn vị khác.");
+                }
+
+                whereSql += " AND a.donvi_id = :donViId AND a.nhanvien_id = :nhanVienId";
+                parameters.Add("donViId", filter.DonViId.Value, DbType.Int64);
+                parameters.Add("nhanVienId", filter.NhanVienId.Value, DbType.Int64);
+            }
             else if (loai is "TTVT" or "PBH")
             {
                 if (!filter.DonViId.HasValue || filter.DonViId.Value <= 0)

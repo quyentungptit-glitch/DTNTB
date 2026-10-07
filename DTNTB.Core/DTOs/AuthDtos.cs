@@ -68,10 +68,10 @@ namespace DTNTB.Core.DTOs
     {
         [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
         public string Username { get; set; } = string.Empty;
-        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(256)]
-        public string Password { get; set; } = string.Empty;
         [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(8192)]
         public string OldToken { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(512)]
+        public string SecretKey { get; set; } = string.Empty;
     }
 
     public class DirectLoginRequestDto
