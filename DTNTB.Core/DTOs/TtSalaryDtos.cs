@@ -15,6 +15,12 @@ public sealed class TtSalaryLoginRequestDto
     public string Password { get; init; } = string.Empty;
 }
 
+public sealed class TtSalaryMarkSalarySlipViewedRequestDto
+{
+    [Required, StringLength(100)]
+    public string MaHrm { get; init; } = string.Empty;
+}
+
 /// <summary>
 /// Phản hồi nguyên trạng từ hệ thống lương nội bộ để controller relay về client.
 /// </summary>

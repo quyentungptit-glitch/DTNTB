@@ -9,4 +9,5 @@ public interface ITtSalaryService
         CancellationToken cancellationToken = default);
     Task<TtSalaryRelayResponseDto> GetEmployeeSalaryAsync(int month, string? userToken, CancellationToken cancellationToken = default);
     Task<TtSalaryRelayResponseDto> GetNewSalarySlipStatusAsync(string maHrm, CancellationToken cancellationToken = default);
+    Task<TtSalaryRelayResponseDto> MarkSalarySlipViewedAsync(string maHrm, CancellationToken cancellationToken = default);
 }

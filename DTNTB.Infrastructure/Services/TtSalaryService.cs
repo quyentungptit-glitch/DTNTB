@@ -97,6 +97,31 @@ public sealed class TtSalaryService : ITtSalaryService
         });
     }
 
+    public async Task<TtSalaryRelayResponseDto> MarkSalarySlipViewedAsync(
+        string maHrm,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedMaHrm = NormalizeMaHrm(maHrm);
+        if (normalizedMaHrm is null)
+        {
+            return Error((int)HttpStatusCode.BadRequest, "maHrm là bắt buộc và không được vượt quá 100 ký tự.");
+        }
+
+        var markViewedPath = GetConfiguredPath("MarkSalarySlipViewedPath", "app/luong/nv/mark-viewed");
+        using var upstreamRequest = CreateUpstreamRequest(HttpMethod.Post, markViewedPath);
+        if (upstreamRequest is null) return UpstreamConfigurationError();
+
+        // HRM nội bộ phải lưu trạng thái đã xem, để lần GET new-status tiếp theo trả false.
+        upstreamRequest.Content = JsonContent.Create(new { maHrm = normalizedMaHrm });
+        return await SendAndRelayAsync(upstreamRequest, cancellationToken);
+    }
+
+    private static string? NormalizeMaHrm(string? maHrm)
+    {
+        var normalized = maHrm?.Trim().ToUpperInvariant();
+        return string.IsNullOrWhiteSpace(normalized) || normalized.Length > 100 ? null : normalized;
+    }
+
     private HttpRequestMessage? CreateUpstreamRequest(HttpMethod method, string relativePath)
     {
         var baseUrl = _configuration["TtSalary:BaseUrl"]?.Trim();

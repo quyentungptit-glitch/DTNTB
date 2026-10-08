@@ -61,6 +61,21 @@ public sealed class TtSalaryController : ControllerBase
         return Relay(await _ttSalaryService.GetNewSalarySlipStatusAsync(maHrm, cancellationToken));
     }
 
+    /// <summary>
+    /// Đánh dấu người dùng đã xem phiếu lương để lần kiểm tra tiếp theo không hiện badge.
+    /// Không yêu cầu Bearer token theo hợp đồng mobile hiện tại.
+    /// </summary>
+    [HttpPost("luong/nv/mark-viewed")]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> MarkSalarySlipViewed(
+        [FromBody] TtSalaryMarkSalarySlipViewedRequestDto request,
+        CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
+
+        return Relay(await _ttSalaryService.MarkSalarySlipViewedAsync(request.MaHrm, cancellationToken));
+    }
+
     private string? ExtractBearerToken()
     {
         return AuthenticationHeaderValue.TryParse(Request.Headers.Authorization.ToString(), out var authorization)
