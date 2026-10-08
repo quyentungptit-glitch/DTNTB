@@ -69,6 +69,34 @@ public sealed class TtSalaryService : ITtSalaryService
         return await SendAndRelayAsync(upstreamRequest, cancellationToken);
     }
 
+    public Task<TtSalaryRelayResponseDto> GetNewSalarySlipStatusAsync(
+        string maHrm,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(maHrm) || maHrm.Trim().Length > 100)
+        {
+            return Task.FromResult(Error((int)HttpStatusCode.BadRequest, "maHrm là bắt buộc và không được vượt quá 100 ký tự."));
+        }
+
+        // Tạm thời chưa có endpoint trạng thái từ HRM. Giữ hợp đồng response cho mobile.
+        //
+        // Khi HRM đã có API, thay return mock bên dưới bằng đoạn sau:
+        // var statusPath = GetConfiguredPath("NewSalaryStatusPath", "app/luong/nv/new-status");
+        // var separator = statusPath.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+        // var relativePath = $"{statusPath}{separator}maHrm={Uri.EscapeDataString(maHrm.Trim())}";
+        // using var upstreamRequest = CreateUpstreamRequest(HttpMethod.Get, relativePath);
+        // if (upstreamRequest is null) return Task.FromResult(UpstreamConfigurationError());
+        // return SendAndRelayAsync(upstreamRequest, cancellationToken);
+        //
+        // Cấu hình TtSalary:NewSalaryStatusPath phải là đường dẫn tương đối của API HRM.
+        // API HRM cần trả { "hasNewSalarySlip": true } hoặc { "hasNewSalarySlip": false }.
+        return Task.FromResult(new TtSalaryRelayResponseDto
+        {
+            StatusCode = (int)HttpStatusCode.OK,
+            Content = JsonSerializer.Serialize(new { hasNewSalarySlip = true })
+        });
+    }
+
     private HttpRequestMessage? CreateUpstreamRequest(HttpMethod method, string relativePath)
     {
         var baseUrl = _configuration["TtSalary:BaseUrl"]?.Trim();

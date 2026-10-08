@@ -48,6 +48,19 @@ public sealed class TtSalaryController : ControllerBase
         return Relay(await _ttSalaryService.GetEmployeeSalaryAsync(month, userToken, cancellationToken));
     }
 
+    /// <summary>
+    /// Kiểm tra nhân viên có phiếu lương mới. Không yêu cầu Bearer token theo hợp đồng mobile;
+    /// chỉ trả về trạng thái true/false do hệ thống lương nội bộ cung cấp.
+    /// </summary>
+    [HttpGet("luong/nv/new-status")]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> GetNewSalarySlipStatus(
+        [FromQuery] string maHrm,
+        CancellationToken cancellationToken)
+    {
+        return Relay(await _ttSalaryService.GetNewSalarySlipStatusAsync(maHrm, cancellationToken));
+    }
+
     private string? ExtractBearerToken()
     {
         return AuthenticationHeaderValue.TryParse(Request.Headers.Authorization.ToString(), out var authorization)
