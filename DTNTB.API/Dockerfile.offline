@@ -1,0 +1,18 @@
+# Image API cho máy chủ KHÔNG có Internet.
+# Không restore NuGet, không apt-get: chỉ chép bản đã publish sẵn trên máy dev (thư mục ./publish).
+# Cách dùng: xem deploy/OFFLINE_DEPLOY.md
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+
+WORKDIR /app
+COPY publish/ .
+
+# Thư mục này được bind mount ở production; tạo sẵn với đúng UID của user app.
+RUN mkdir -p /home/app/.aspnet/DataProtection-Keys \
+    && chown -R $APP_UID:$APP_UID /home/app/.aspnet
+
+ENV TZ=Asia/Ho_Chi_Minh
+
+USER $APP_UID
+EXPOSE 8080
+
+ENTRYPOINT ["dotnet", "DTNTB.API.dll"]

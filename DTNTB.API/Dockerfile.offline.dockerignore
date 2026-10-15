@@ -1,0 +1,9 @@
+# Chỉ đưa bản publish vào image; không bao giờ đưa file bí mật của máy dev.
+*
+!publish/
+publish/appsettings.Local.json
+publish/appsettings.Development.json
+publish/**/firebase-service-account.json
+publish/**/*.pfx
+publish/**/*.pem
+publish/**/*.key

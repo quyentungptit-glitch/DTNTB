@@ -63,6 +63,17 @@
             public const string UPDATE    = "PERMISSIONS.THONGBAO.UPDATE";
             public const string SEND_TEST = "PERMISSIONS.THONGBAO.SEND_TEST";
         }
+
+        // ==========================================
+        // MODULE: ĐIỂM DANH HIỆN TRƯỜNG (DIEMDANH)
+        // ==========================================
+        public static class DIEMDANH
+        {
+            public const string CHECKIN = "PERMISSIONS.DIEMDANH.CHECKIN"; // Nhân viên chụp ảnh điểm danh
+            public const string VIEW    = "PERMISSIONS.DIEMDANH.VIEW";    // Xem bản đồ / danh sách / lịch sử theo phạm vi
+            public const string EXPORT  = "PERMISSIONS.DIEMDANH.EXPORT";  // Xuất Excel lịch sử điểm danh
+            public const string DELETE  = "PERMISSIONS.DIEMDANH.DELETE";  // Xóa lượt điểm danh (kèm ảnh) trong phạm vi
+        }
     }
 
     // ==========================================

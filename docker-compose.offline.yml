@@ -1,0 +1,13 @@
+# Ghép thêm khi máy chủ không có Internet: build image từ bản đã build sẵn trên máy dev.
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml up -d --build
+# Xem deploy/OFFLINE_DEPLOY.md
+services:
+  api:
+    build:
+      context: .
+      dockerfile: DTNTB.API/Dockerfile.offline
+
+  frontend:
+    build:
+      context: ../DTNTB-Frontend
+      dockerfile: Dockerfile.offline

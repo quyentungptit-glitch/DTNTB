@@ -13,6 +13,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Font in chữ lên ảnh điểm danh (có dấu tiếng Việt), đi kèm bản publish nên máy chủ không cần cài font. -->
+    <None Include="Fonts\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\DTNTB.Core\DTNTB.Core.csproj" />
     <ProjectReference Include="..\DTNTB.Infrastructure\DTNTB.Infrastructure.csproj" />
   </ItemGroup>

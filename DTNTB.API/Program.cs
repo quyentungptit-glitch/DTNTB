@@ -54,7 +54,9 @@ foreach (var secretKey in new[]
     "Sso:ApiKey",
     "SystemToSystem:SecretKey",
     "TokenConversion:SecretKey",
-    "RemoteStorage:InternalApiKey"
+    "RemoteStorage:InternalApiKey",
+    "Minio:AccessKey",
+    "Minio:SecretKey"
 })
 {
     LoadSecretFile(secretKey);
@@ -100,6 +102,17 @@ builder.Services.AddScoped<IGhttService, GhttService>();
 builder.Services.AddScoped<IHeThongService, HeThongService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddSingleton<INotificationAdminService, NotificationAdminService>();
+
+// Điểm danh hiện trường: đổi toạ độ ra địa chỉ (cache theo toạ độ) + lưu ảnh qua Storage server.
+builder.Services.AddMemoryCache();
+builder.Services.AddHttpClient<IReverseGeocodingService, ReverseGeocodingService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(
+        Math.Clamp(builder.Configuration.GetValue<int?>("Geocoding:TimeoutSeconds") ?? 5, 2, 15));
+    client.MaxResponseContentBufferSize = 512 * 1024;
+});
+builder.Services.AddScoped<IDiemDanhService, DiemDanhService>();
+builder.Services.AddSingleton<IDiemDanhImageStore, MinioDiemDanhImageStore>(); // Ảnh điểm danh lưu ở MinIO, bucket riêng
 if (builder.Configuration.GetValue<bool>("BackgroundWorkers:FcmNotificationEnabled"))
 {
     builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();

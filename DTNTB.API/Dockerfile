@@ -14,7 +14,7 @@ RUN dotnet publish "DTNTB.API/DTNTB.API.csproj" \
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends tzdata \
+    && apt-get install --yes --no-install-recommends tzdata fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
