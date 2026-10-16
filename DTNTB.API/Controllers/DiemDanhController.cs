@@ -164,6 +164,36 @@ namespace DTNTB.API.Controllers
             }
         }
 
+        /// <summary>
+        /// Duyệt / từ chối / đưa về chờ duyệt một lượt điểm danh trong phạm vi dữ liệu (kể cả lượt của chính mình);
+        /// cần quyền APPROVE và VIEW.
+        /// Body: { trangThai: "DA_DUYET" | "TU_CHOI" | "CHO_DUYET", lyDo: "..." (bắt buộc khi từ chối) }.
+        /// </summary>
+        [HttpPost("{id:long}/duyet")]
+        [Authorize(Policy = AppPermissions.DIEMDANH.APPROVE)]
+        public async Task<IActionResult> Duyet(long id, [FromBody] DiemDanhDuyetDto model)
+        {
+            if (!_currentUser.HasPermission(AppPermissions.DIEMDANH.VIEW)) return Forbid();
+
+            try
+            {
+                var item = await _service.DuyetAsync(id, model ?? new DiemDanhDuyetDto());
+                return item != null
+                    ? Ok(item)
+                    : NotFound(new { message = "Không tìm thấy lượt điểm danh hoặc lượt này ngoài phạm vi quản lý." });
+            }
+            catch (DiemDanhValidationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Duyệt lượt điểm danh {Id} thất bại. TraceId {TraceId}", id, HttpContext.TraceIdentifier);
+                return StatusCode(StatusCodes.Status500InternalServerError,
+                    new { message = $"Chưa lưu được kết quả duyệt. Mã tra cứu: {HttpContext.TraceIdentifier}" });
+            }
+        }
+
         /// <summary>Xóa một lượt điểm danh (kèm ảnh) trong phạm vi dữ liệu; cần quyền DELETE và VIEW.</summary>
         [HttpDelete("{id:long}")]
         [Authorize(Policy = AppPermissions.DIEMDANH.DELETE)]

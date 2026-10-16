@@ -73,6 +73,7 @@
             public const string VIEW    = "PERMISSIONS.DIEMDANH.VIEW";    // Xem bản đồ / danh sách / lịch sử theo phạm vi
             public const string EXPORT  = "PERMISSIONS.DIEMDANH.EXPORT";  // Xuất Excel lịch sử điểm danh
             public const string DELETE  = "PERMISSIONS.DIEMDANH.DELETE";  // Xóa lượt điểm danh (kèm ảnh) trong phạm vi
+            public const string APPROVE = "PERMISSIONS.DIEMDANH.APPROVE"; // Duyệt / từ chối lượt điểm danh trong phạm vi
         }
     }
 

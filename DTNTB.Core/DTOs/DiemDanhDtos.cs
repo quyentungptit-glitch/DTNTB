@@ -79,6 +79,40 @@ namespace DTNTB.Core.DTOs
         public string AnhUrl { get; set; } = string.Empty;
         /// <summary>Số ảnh của lượt điểm danh.</summary>
         public int SoAnh { get; set; } = 1;
+
+        /// <summary>CHO_DUYET | DA_DUYET | TU_CHOI</summary>
+        public string TrangThai { get; set; } = DiemDanhTrangThai.CHO_DUYET;
+        /// <summary>Tài khoản (ma_nd) người duyệt/từ chối gần nhất.</summary>
+        public string? NguoiDuyet { get; set; }
+        public string? TenNguoiDuyet { get; set; }
+        public DateTime? ThoiGianDuyet { get; set; }
+        public string? LyDoTuChoi { get; set; }
+    }
+
+    /// <summary>Trạng thái duyệt của một lượt điểm danh.</summary>
+    public static class DiemDanhTrangThai
+    {
+        public const string CHO_DUYET = "CHO_DUYET";
+        public const string DA_DUYET = "DA_DUYET";
+        public const string TU_CHOI = "TU_CHOI";
+
+        public static readonly IReadOnlyList<string> All = new[] { CHO_DUYET, DA_DUYET, TU_CHOI };
+
+        public static string Ten(string? code) => code switch
+        {
+            DA_DUYET => "Đã duyệt",
+            TU_CHOI => "Từ chối",
+            _ => "Chờ duyệt"
+        };
+    }
+
+    /// <summary>Duyệt / từ chối / đưa về chờ duyệt một lượt điểm danh.</summary>
+    public class DiemDanhDuyetDto
+    {
+        /// <summary>DA_DUYET | TU_CHOI | CHO_DUYET (hoàn tác về chờ duyệt).</summary>
+        public string? TrangThai { get; set; }
+        /// <summary>Bắt buộc khi TU_CHOI, tối đa 500 ký tự.</summary>
+        public string? LyDo { get; set; }
     }
 
     /// <summary>Một dòng trong danh sách "ai đã điểm danh, mấy lần" theo ngày.</summary>
@@ -97,6 +131,9 @@ namespace DTNTB.Core.DTOs
         public long DiemDanhIdCuoi { get; set; }
         public string? DiaChiCuoi { get; set; }
         public int SoCanhBao { get; set; }
+        public int SoDaDuyet { get; set; }
+        public int SoChoDuyet { get; set; }
+        public int SoTuChoi { get; set; }
     }
 
     /// <summary>Một tổ trong danh sách tổng hợp (mã tổ = toàn bộ ma_dv).</summary>
@@ -106,6 +143,7 @@ namespace DTNTB.Core.DTOs
         public string? TenTo { get; set; }
         public int SoNguoi { get; set; }
         public int SoLuot { get; set; }
+        public int SoChoDuyet { get; set; }
         public List<DiemDanhTongHopDto> NhanVien { get; set; } = new();
     }
 
@@ -117,6 +155,7 @@ namespace DTNTB.Core.DTOs
         public int SoTo { get; set; }
         public int SoNguoi { get; set; }
         public int SoLuot { get; set; }
+        public int SoChoDuyet { get; set; }
         public List<DiemDanhTongHopNhomDto> To { get; set; } = new();
     }
 
@@ -133,6 +172,8 @@ namespace DTNTB.Core.DTOs
         /// <summary>Tìm theo tên, mã nhân viên, địa chỉ hoặc ghi chú.</summary>
         public string? Search { get; set; }
         public bool ChiCanhBao { get; set; }
+        /// <summary>Lọc theo trạng thái duyệt: CHO_DUYET | DA_DUYET | TU_CHOI (bỏ trống = tất cả).</summary>
+        public string? TrangThai { get; set; }
         public int Page { get; set; } = 1;
         public int PageSize { get; set; } = 20;
     }

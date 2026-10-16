@@ -433,13 +433,17 @@ namespace DTNTB.Infrastructure.Services
             var rows = (await conn.QueryAsync<DiemDanhTongHopDto>($@"
                 SELECT ma_nd AS MaNd, ma_nv AS MaNv, ten_nv AS TenNv, ma_dv AS MaDv, ten_to AS TenTo, ten_dv AS TenDv,
                        so_lan AS SoLan, lan_dau AS LanDau, created_at AS LanCuoi,
-                       diemdanh_id AS DiemDanhIdCuoi, dia_chi AS DiaChiCuoi, so_cb AS SoCanhBao
+                       diemdanh_id AS DiemDanhIdCuoi, dia_chi AS DiaChiCuoi, so_cb AS SoCanhBao,
+                       so_duyet AS SoDaDuyet, so_cho AS SoChoDuyet, so_tu_choi AS SoTuChoi
                 FROM (
                     SELECT d.ma_nd, d.ma_nv, d.ten_nv, d.ma_dv, d.ten_to, d.ten_dv, d.created_at, d.diemdanh_id, d.dia_chi,
                            ROW_NUMBER() OVER (PARTITION BY d.ma_nd ORDER BY d.created_at DESC, d.diemdanh_id DESC) AS rn,
                            COUNT(1) OVER (PARTITION BY d.ma_nd) AS so_lan,
                            MIN(d.created_at) OVER (PARTITION BY d.ma_nd) AS lan_dau,
-                           SUM(CASE WHEN d.canh_bao IS NULL THEN 0 ELSE 1 END) OVER (PARTITION BY d.ma_nd) AS so_cb
+                           SUM(CASE WHEN d.canh_bao IS NULL THEN 0 ELSE 1 END) OVER (PARTITION BY d.ma_nd) AS so_cb,
+                           SUM(CASE WHEN d.trang_thai = 'DA_DUYET' THEN 1 ELSE 0 END) OVER (PARTITION BY d.ma_nd) AS so_duyet,
+                           SUM(CASE WHEN d.trang_thai = 'CHO_DUYET' THEN 1 ELSE 0 END) OVER (PARTITION BY d.ma_nd) AS so_cho,
+                           SUM(CASE WHEN d.trang_thai = 'TU_CHOI' THEN 1 ELSE 0 END) OVER (PARTITION BY d.ma_nd) AS so_tu_choi
                     FROM dtntb_diemdanh d
                     WHERE {where}
                 )
@@ -458,6 +462,7 @@ namespace DTNTB.Infrastructure.Services
                             TenTo = to.Select(x => x.TenTo).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))?.Trim() ?? to.Key,
                             SoNguoi = to.Count(),
                             SoLuot = to.Sum(x => x.SoLan),
+                            SoChoDuyet = to.Sum(x => x.SoChoDuyet),
                             NhanVien = to.OrderBy(x => x.TenNv, VietnameseComparer).ToList()
                         })
                         .OrderBy(to => to.TenTo, VietnameseComparer)
@@ -470,6 +475,7 @@ namespace DTNTB.Infrastructure.Services
                         SoTo = toList.Count,
                         SoNguoi = toList.Sum(t => t.SoNguoi),
                         SoLuot = toList.Sum(t => t.SoLuot),
+                        SoChoDuyet = toList.Sum(t => t.SoChoDuyet),
                         To = toList
                     };
                 })
@@ -483,7 +489,7 @@ namespace DTNTB.Infrastructure.Services
             var (tuNgay, denNgay) = NormalizeRange(query.TuNgay, query.DenNgay);
             var page = Math.Max(1, query.Page);
             var pageSize = Math.Clamp(query.PageSize, 1, 100);
-            var (where, p) = BuildFilter(tuNgay, denNgay, query.MaDv, query.MaTo, query.MaNd, query.Search, query.ChiCanhBao);
+            var (where, p) = BuildFilter(tuNgay, denNgay, query.MaDv, query.MaTo, query.MaNd, query.Search, query.ChiCanhBao, query.TrangThai);
 
             await using var conn = new OracleConnection(_connString);
             var total = await conn.ExecuteScalarAsync<int>($"SELECT COUNT(1) FROM dtntb_diemdanh d WHERE {where}", p);
@@ -509,7 +515,7 @@ namespace DTNTB.Infrastructure.Services
         public async Task<byte[]> ExportLichSuAsync(DiemDanhLichSuQueryDto query)
         {
             var (tuNgay, denNgay) = NormalizeRange(query.TuNgay, query.DenNgay);
-            var (where, p) = BuildFilter(tuNgay, denNgay, query.MaDv, query.MaTo, query.MaNd, query.Search, query.ChiCanhBao);
+            var (where, p) = BuildFilter(tuNgay, denNgay, query.MaDv, query.MaTo, query.MaNd, query.Search, query.ChiCanhBao, query.TrangThai);
 
             await using var conn = new OracleConnection(_connString);
             var rows = (await conn.QueryAsync<DiemDanhRow>($@"
@@ -523,12 +529,13 @@ namespace DTNTB.Infrastructure.Services
             var ws = workbook.Worksheets.Add("DiemDanh");
 
             ws.Cell(1, 1).Value = $"LỊCH SỬ ĐIỂM DANH HIỆN TRƯỜNG TỪ {tuNgay:dd/MM/yyyy} ĐẾN {denNgay:dd/MM/yyyy}";
-            ws.Range(1, 1, 1, 16).Merge().Style.Font.SetBold().Font.SetFontSize(13);
+            ws.Range(1, 1, 1, 20).Merge().Style.Font.SetBold().Font.SetFontSize(13);
 
             var headers = new[]
             {
                 "STT", "Thời gian", "Mã NV", "Tên nhân viên", "Mã đơn vị", "Tên đơn vị", "Mã tổ", "Tên tổ", "Loại công việc",
-                "Ghi chú", "Địa chỉ", "Vĩ độ", "Kinh độ", "Sai số GPS (m)", "Cảnh báo", "Xem bản đồ"
+                "Ghi chú", "Địa chỉ", "Vĩ độ", "Kinh độ", "Sai số GPS (m)", "Cảnh báo", "Xem bản đồ",
+                "Trạng thái duyệt", "Người duyệt", "Thời gian duyệt", "Lý do từ chối"
             };
             for (var i = 0; i < headers.Length; i++) ws.Cell(3, i + 1).Value = headers[i];
             var headerRange = ws.Range(3, 1, 3, headers.Length);
@@ -559,12 +566,23 @@ namespace DTNTB.Infrastructure.Services
                 var mapUrl = string.Create(CultureInfo.InvariantCulture, $"https://www.google.com/maps?q={item.Latitude},{item.Longitude}");
                 ws.Cell(row, 16).Value = "Mở bản đồ";
                 ws.Cell(row, 16).SetHyperlink(new XLHyperlink(mapUrl));
+                ws.Cell(row, 17).Value = DiemDanhTrangThai.Ten(item.TrangThai);
+                if (item.TrangThai == DiemDanhTrangThai.TU_CHOI) ws.Cell(row, 17).Style.Font.FontColor = XLColor.Red;
+                else if (item.TrangThai == DiemDanhTrangThai.DA_DUYET) ws.Cell(row, 17).Style.Font.FontColor = XLColor.FromHtml("#16a34a");
+                ws.Cell(row, 18).Value = ExcelText(item.TenNguoiDuyet ?? item.NguoiDuyet);
+                if (item.ThoiGianDuyet.HasValue)
+                {
+                    ws.Cell(row, 19).Value = item.ThoiGianDuyet.Value;
+                    ws.Cell(row, 19).Style.DateFormat.Format = "dd/MM/yyyy HH:mm";
+                }
+                ws.Cell(row, 20).Value = ExcelText(item.LyDoTuChoi);
                 row++;
             }
 
-            var widths = new[] { 6d, 20d, 14d, 24d, 10d, 26d, 14d, 30d, 20d, 30d, 44d, 12d, 12d, 12d, 22d, 14d };
+            var widths = new[] { 6d, 20d, 14d, 24d, 10d, 26d, 14d, 30d, 20d, 30d, 44d, 12d, 12d, 12d, 22d, 14d, 14d, 24d, 18d, 34d };
             for (var c = 1; c <= widths.Length; c++) ws.Column(c).Width = widths[c - 1];
             ws.Columns(10, 11).Style.Alignment.WrapText = true;
+            ws.Column(20).Style.Alignment.WrapText = true;
             ws.SheetView.FreezeRows(3);
 
             using var output = new MemoryStream();
@@ -656,6 +674,58 @@ namespace DTNTB.Infrastructure.Services
             return true;
         }
 
+        // ============================================================
+        // DUYỆT
+        // ============================================================
+        public async Task<DiemDanhItemDto?> DuyetAsync(long diemDanhId, DiemDanhDuyetDto model)
+        {
+            var username = _currentUser.Username?.Trim();
+            if (diemDanhId <= 0 || string.IsNullOrEmpty(username)) return null;
+
+            var trangThai = (model.TrangThai ?? string.Empty).Trim().ToUpperInvariant();
+            if (!DiemDanhTrangThai.All.Contains(trangThai))
+                throw new DiemDanhValidationException("Kết quả duyệt không hợp lệ.");
+
+            var lyDo = CleanText(model.LyDo, MaxGhiChuLength);
+            if (trangThai == DiemDanhTrangThai.TU_CHOI && lyDo == null)
+                throw new DiemDanhValidationException("Vui lòng nhập lý do từ chối.");
+            if (trangThai != DiemDanhTrangThai.TU_CHOI) lyDo = null;
+
+            var p = new DynamicParameters();
+            p.Add("id", diemDanhId);
+            var scope = BuildScopeClause(p);
+
+            await using var conn = new OracleConnection(_connString);
+            await conn.OpenAsync();
+
+            var owner = await conn.ExecuteScalarAsync<string?>(
+                $"SELECT d.ma_nd FROM dtntb_diemdanh d WHERE d.diemdanh_id = :id AND {scope}", p);
+            if (owner == null) return null;
+
+            var u = new DynamicParameters();
+            u.Add("id", diemDanhId);
+            u.Add("tt", trangThai);
+            var hoanTac = trangThai == DiemDanhTrangThai.CHO_DUYET;
+            u.Add("nguoi", hoanTac ? null : username);
+            u.Add("ten", hoanTac ? null : Truncate(Trim(_currentUser.TenNv) ?? username, 200));
+            u.Add("ly_do", lyDo);
+            await conn.ExecuteAsync($@"
+                UPDATE dtntb_diemdanh
+                SET trang_thai = :tt,
+                    nguoi_duyet = :nguoi,
+                    ten_nguoi_duyet = :ten,
+                    thoi_gian_duyet = {(hoanTac ? "NULL" : "SYSDATE")},
+                    ly_do_tu_choi = :ly_do
+                WHERE diemdanh_id = :id", u);
+
+            _logger.LogInformation("Người dùng {User} đặt lượt điểm danh {Id} của {Owner} thành {TrangThai}.",
+                username, diemDanhId, owner.Trim(), trangThai);
+
+            var row = await conn.QueryFirstOrDefaultAsync<DiemDanhRow>(
+                $"SELECT {ItemColumns} FROM dtntb_diemdanh d WHERE d.diemdanh_id = :id", new { id = diemDanhId });
+            return row == null ? null : ToItem(row);
+        }
+
         /// <summary>Xóa ảnh trên MinIO, lỗi chỉ ghi log (dùng khi dọn ảnh mồ côi hoặc sau khi đã xóa bản ghi).</summary>
         private async Task DeleteImagesQuietlyAsync(IEnumerable<string> keys)
         {
@@ -699,7 +769,8 @@ namespace DTNTB.Infrastructure.Services
         }
 
         private (string Where, DynamicParameters Params) BuildFilter(
-            DateTime tuNgay, DateTime denNgay, string? maDv, string? maTo, string? maNd, string? search, bool chiCanhBao)
+            DateTime tuNgay, DateTime denNgay, string? maDv, string? maTo, string? maNd, string? search, bool chiCanhBao,
+            string? trangThai = null)
         {
             var p = new DynamicParameters();
             var where = new List<string> { BuildScopeClause(p), "d.ngay BETWEEN :tu_ngay AND :den_ngay" };
@@ -738,6 +809,15 @@ namespace DTNTB.Infrastructure.Services
             }
 
             if (chiCanhBao) where.Add("d.canh_bao IS NOT NULL");
+
+            if (!string.IsNullOrWhiteSpace(trangThai) && !trangThai.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                var tt = trangThai.Trim().ToUpperInvariant();
+                if (!DiemDanhTrangThai.All.Contains(tt))
+                    throw new DiemDanhValidationException("Trạng thái duyệt không hợp lệ.");
+                where.Add("d.trang_thai = :f_tt");
+                p.Add("f_tt", tt);
+            }
 
             return (string.Join(" AND ", where), p);
         }
@@ -886,7 +966,9 @@ namespace DTNTB.Infrastructure.Services
         private const string ItemColumns = @"
             d.diemdanh_id AS DiemDanhId, d.created_at AS ThoiGian, d.ma_nd AS MaNd, d.ma_nv AS MaNv, d.ten_nv AS TenNv,
             d.ma_dv AS MaDv, d.ten_to AS TenTo, d.ten_dv AS TenDv, d.latitude AS Latitude, d.longitude AS Longitude, d.accuracy_m AS AccuracyM,
-            d.dia_chi AS DiaChi, d.loai_cong_viec AS LoaiCongViec, d.ghi_chu AS GhiChu, d.canh_bao AS CanhBao, d.so_anh AS SoAnh";
+            d.dia_chi AS DiaChi, d.loai_cong_viec AS LoaiCongViec, d.ghi_chu AS GhiChu, d.canh_bao AS CanhBao, d.so_anh AS SoAnh,
+            d.trang_thai AS TrangThai, d.nguoi_duyet AS NguoiDuyet, d.ten_nguoi_duyet AS TenNguoiDuyet,
+            d.thoi_gian_duyet AS ThoiGianDuyet, d.ly_do_tu_choi AS LyDoTuChoi";
 
         private sealed class DiemDanhRow
         {
@@ -906,6 +988,11 @@ namespace DTNTB.Infrastructure.Services
             public string? GhiChu { get; set; }
             public string? CanhBao { get; set; }
             public int SoAnh { get; set; }
+            public string? TrangThai { get; set; }
+            public string? NguoiDuyet { get; set; }
+            public string? TenNguoiDuyet { get; set; }
+            public DateTime? ThoiGianDuyet { get; set; }
+            public string? LyDoTuChoi { get; set; }
         }
 
         private sealed class UserSnapshot
@@ -939,7 +1026,12 @@ namespace DTNTB.Infrastructure.Services
                 ? new List<string>()
                 : r.CanhBao.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
             AnhUrl = AnhUrl(r.DiemDanhId),
-            SoAnh = Math.Max(1, r.SoAnh)
+            SoAnh = Math.Max(1, r.SoAnh),
+            TrangThai = string.IsNullOrWhiteSpace(r.TrangThai) ? DiemDanhTrangThai.CHO_DUYET : r.TrangThai.Trim(),
+            NguoiDuyet = r.NguoiDuyet?.Trim(),
+            TenNguoiDuyet = r.TenNguoiDuyet?.Trim(),
+            ThoiGianDuyet = r.ThoiGianDuyet,
+            LyDoTuChoi = r.LyDoTuChoi
         };
 
         private static StringComparer CreateVietnameseComparer()

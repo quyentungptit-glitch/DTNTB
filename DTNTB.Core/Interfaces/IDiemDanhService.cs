@@ -44,6 +44,12 @@ namespace DTNTB.Core.Interfaces
         /// Trả false nếu không thấy hoặc ngoài phạm vi.
         /// </summary>
         Task<bool> DeleteAsync(long diemDanhId, CancellationToken ct = default);
+
+        /// <summary>
+        /// Duyệt / từ chối / đưa về chờ duyệt một lượt trong phạm vi dữ liệu của người duyệt.
+        /// Trả lượt sau khi cập nhật, null nếu không thấy/ngoài phạm vi.
+        /// </summary>
+        Task<DiemDanhItemDto?> DuyetAsync(long diemDanhId, DiemDanhDuyetDto model);
     }
 
     /// <summary>Lỗi nghiệp vụ khi điểm danh; Message hiển thị thẳng cho người dùng.</summary>

@@ -16,6 +16,7 @@ Tổ trưởng/lãnh đạo xem bản đồ trong ngày, danh sách ai đã đi�
    | `PERMISSIONS.DIEMDANH.CHECKIN` | Nhân viên được điểm danh |
    | `PERMISSIONS.DIEMDANH.VIEW` | Xem bản đồ / danh sách / lịch sử (theo phạm vi dữ liệu của role) |
    | `PERMISSIONS.DIEMDANH.EXPORT` | Xuất Excel (cần kèm VIEW) |
+   | `PERMISSIONS.DIEMDANH.APPROVE` | Duyệt / từ chối lượt điểm danh trong phạm vi dữ liệu (cần kèm VIEW). Tạo bằng `20261016_diemdanh_duyet.sql` |
    | `PERMISSIONS.DIEMDANH.DELETE` | Xóa lượt điểm danh kèm ảnh, trong phạm vi dữ liệu (cần kèm VIEW). Tạo bằng `20261015c_diemdanh_permission_delete.sql` |
 3. Gán menu `MENU_DIEMDANH` (/diemdanh) và `MENU_DIEMDANH_THEODOI` (/diemdanh/theo-doi) trong form Phân Menu.
 4. Ảnh điểm danh lưu ở **MinIO**, bucket `ttht-diemdanh` (không qua Storage server), chia thư mục con theo
@@ -75,8 +76,9 @@ Lỗi nghiệp vụ trả **400** `{ message }` (thiếu GPS, ảnh không hợp
 | GET | `/to?maDv=` | Tổ của đơn vị: `[{ maTo, tenTo }]` (maTo = toàn bộ ma_dv) |
 | GET | `/ban-do?ngay=&maDv=&maTo=` | Mọi lượt điểm danh trong ngày để chấm bản đồ (tối đa 5000) |
 | GET | `/tong-hop?ngay=&maDv=&maTo=` | Ai đã điểm danh, mấy lần: đơn vị → tổ → nhân viên |
-| GET | `/lich-su?tuNgay=&denNgay=&maDv=&maTo=&maNd=&search=&chiCanhBao=&page=&pageSize=` | Lịch sử phân trang `{ items, totalCount }`, tối đa 92 ngày |
+| GET | `/lich-su?tuNgay=&denNgay=&maDv=&maTo=&maNd=&search=&chiCanhBao=&trangThai=&page=&pageSize=` | Lịch sử phân trang `{ items, totalCount }`, tối đa 92 ngày |
 | GET | `/lich-su/export?...` | Excel cùng bộ lọc (cần EXPORT + VIEW), tối đa 50.000 dòng |
+| POST | `/{id}/duyet` | Duyệt/từ chối: `{ trangThai: "DA_DUYET" \| "TU_CHOI" \| "CHO_DUYET", lyDo }` (lý do bắt buộc khi từ chối). Cần APPROVE + VIEW, trong phạm vi (duyệt được cả lượt của mình). Trả lượt đã cập nhật |
 | DELETE | `/{id}` | Xóa lượt điểm danh và ảnh trên MinIO (cần DELETE + VIEW, trong phạm vi). 204 / 404 |
 
 Quy ước mã: **mã đơn vị = 7 ký tự đầu của `ma_dv`**, **mã tổ = toàn bộ `ma_dv`** (tên tổ lấy từ `v_donvi`).
@@ -123,3 +125,12 @@ Không chặn điểm danh, chỉ đánh dấu để quản lý xem lại:
 
 Font in chữ lên ảnh phải có dấu tiếng Việt. Dockerfile đã cài `fonts-dejavu-core`;
 trên Windows/IIS dùng sẵn Arial.
+
+## Duyệt điểm danh
+
+Mỗi lượt có `trangThai`: `CHO_DUYET` (mặc định khi gửi) → `DA_DUYET` hoặc `TU_CHOI` (kèm `lyDoTuChoi`).
+Duyệt tay từng lượt, không tự động, không hạn chót; người duyệt có thể đổi kết quả hoặc đưa về chờ duyệt.
+Mỗi lượt lưu người duyệt (`nguoiDuyet`, `tenNguoiDuyet`) và `thoiGianDuyet` (giờ máy chủ).
+Tổng hợp theo ngày có `soDaDuyet`, `soChoDuyet`, `soTuChoi` cho từng người, `soChoDuyet` cho tổ/đơn vị.
+Excel lịch sử thêm 4 cột: Trạng thái duyệt, Người duyệt, Thời gian duyệt, Lý do từ chối.
+Chạy `DatabaseScripts/20261016_diemdanh_duyet.sql` trước khi cập nhật API.
