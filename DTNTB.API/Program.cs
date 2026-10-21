@@ -147,6 +147,20 @@ builder.Services.Configure<ForwardedHeadersOptions>(options => // <-- 2. THÊM M
             options.KnownProxies.Add(proxyAddress);
         }
     }
+
+    // Dải mạng của proxy được tin (CIDR), ví dụ mạng Docker "172.16.0.0/12": nginx của container frontend
+    // chuyển /api vào API qua mạng Docker, nên cần tin X-Forwarded-For từ đó để lấy đúng IP người dùng.
+    foreach (var configuredNetwork in builder.Configuration.GetSection("ReverseProxy:KnownNetworks").Get<string[]>() ?? Array.Empty<string>())
+    {
+        var parts = configuredNetwork.Split('/', 2, StringSplitOptions.TrimEntries);
+        if (parts.Length == 2
+            && IPAddress.TryParse(parts[0], out var networkAddress)
+            && int.TryParse(parts[1], out var prefixLength)
+            && prefixLength >= 0 && prefixLength <= (networkAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? 128 : 32))
+        {
+            options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(networkAddress, prefixLength));
+        }
+    }
 });
 
 // ==========================================

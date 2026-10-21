@@ -1,11 +1,16 @@
 # Dùng khi proxy ngoài đã kết thúc TLS và chuyển request HTTP nội bộ về Ubuntu.
-# Frontend nhận ở cổng 80, API nhận ở cổng 8082. Proxy ngoài phải gửi
+# Frontend nhận ở cổng 80 (kèm luôn API qua đường dẫn /api), API riêng ở cổng 8082 (tuỳ chọn,
+# chỉ cần nếu vẫn muốn dùng tên miền clm-api). Proxy ngoài phải gửi
 # X-Forwarded-Proto: https; Nginx này giữ nguyên header đó để API không
 # redirect HTTPS sai. Các container chỉ bind localhost.
 
 server {
     listen 80;
     server_name clm.vnptninhbinh.com.vn;
+    # Trang gọi API qua /api trên chính địa chỉ này (container frontend chuyển tiếp vào API),
+    # nên cần nhận được ảnh điểm danh (tối đa 5 ảnh) và chờ được lúc xuất Excel.
+    client_max_body_size 15m;
+    proxy_read_timeout 120s;
 
     location / {
         proxy_pass http://127.0.0.1:8081;
