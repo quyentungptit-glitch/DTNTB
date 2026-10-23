@@ -29,6 +29,8 @@ namespace DTNTB.Core.Interfaces
         Task<NamSPhieuDto> TuTaoAsync(NamSTuTaoRequestDto request);
         /// <summary>Xoá phiếu tự tạo chưa nộp của chính mình (kèm ảnh).</summary>
         Task<bool> XoaPhieuTuTaoAsync(long phieuId, CancellationToken ct = default);
+        /// <summary>Người chấm xoá phiếu (mọi trạng thái) trong phạm vi, kèm ảnh và điểm.</summary>
+        Task<bool> XoaPhieuAsync(long phieuId, CancellationToken ct = default);
         Task<NamSPhieuChiTietDto?> GetPhieuAsync(long phieuId);
         Task<List<NamSAnhDto>> UploadAnhAsync(long phieuId, int tieuChiId, IReadOnlyList<IFormFile> files, string? metaJson, CancellationToken ct = default);
         Task<bool> XoaAnhAsync(long anhId, CancellationToken ct = default);

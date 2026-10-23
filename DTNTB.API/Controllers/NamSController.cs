@@ -248,6 +248,23 @@ namespace DTNTB.API.Controllers
             return await Run(() => _service.GetPhieuListAsync(query));
         }
 
+        /// <summary>Người chấm xoá phiếu trong phạm vi (kèm ảnh, điểm).</summary>
+        [HttpDelete("phieu/{id:long}/quan-ly")]
+        [Authorize(Policy = AppPermissions.NAMS.CHAM)]
+        public async Task<IActionResult> XoaPhieu(long id, CancellationToken ct)
+        {
+            try
+            {
+                return await _service.XoaPhieuAsync(id, ct)
+                    ? NoContent()
+                    : NotFound(new { message = "Không tìm thấy phiếu trong phạm vi của bạn." });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return Fail(ex, "Chưa xoá được phiếu.");
+            }
+        }
+
         [HttpPost("phieu/{id:long}/cham")]
         [Authorize(Policy = AppPermissions.NAMS.CHAM)]
         public async Task<IActionResult> Cham(long id, [FromBody] NamSChamRequestDto request)

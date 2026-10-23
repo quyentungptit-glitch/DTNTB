@@ -115,6 +115,7 @@ builder.Services.AddHttpClient<IReverseGeocodingService, ReverseGeocodingService
 });
 builder.Services.AddScoped<IDiemDanhService, DiemDanhService>();
 builder.Services.AddSingleton<IDiemDanhImageStore, MinioDiemDanhImageStore>(); // Ảnh điểm danh lưu ở MinIO, bucket riêng
+builder.Services.AddSingleton<INamSImageStore, MinioNamSImageStore>(); // Ảnh 5S nhà trạm: MinIO bucket riêng ttht-5s (Minio:Bucket5S)
 if (builder.Configuration.GetValue<bool>("BackgroundWorkers:FcmNotificationEnabled"))
 {
     builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();

@@ -7,7 +7,7 @@ Phạm vi dữ liệu theo `data_scope` trong JWT: TOAN_TINH, DIA_BAN, DON_VI (7
 
 1. Chạy `DatabaseScripts/20261023_5s_nha_tram.sql` (bảng `DTNTB_5S_TIEUCHI`, `DTNTB_5S_PHIEU`, `DTNTB_5S_ANH`, `DTNTB_5S_DIEM`, quyền `PERMISSIONS.NAMS.*`, 4 menu nhóm "5S NHÀ TRẠM").
 2. Gán quyền / menu cho vai trò trong màn Quản trị hệ thống.
-3. Ảnh lưu MinIO cùng bucket với điểm danh, khoá `5s/yyyy-MM/{phieu}_{anh}.jpg`.
+3. Ảnh lưu MinIO bucket riêng `ttht-5s` (đổi bằng `Minio:Bucket5S`; dùng chung Endpoint/AccessKey/SecretKey với điểm danh), khoá `yyyy-MM/{phieu}_{anh}.jpg`. Access key phải có quyền đọc/ghi/xoá trên bucket này. Ảnh thử nghiệm cũ khoá `5s/...` vẫn đọc từ bucket điểm danh.
 4. Cấu hình tuỳ chọn (không có thì dùng mặc định trong code), mục `NamS` trong appsettings:
 
 ```json

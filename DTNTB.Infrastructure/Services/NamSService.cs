@@ -24,7 +24,7 @@ namespace DTNTB.Infrastructure.Services
     ///  - Báo cáo (NAMS.VIEW / EXPORT): tổng hợp đơn vị -> tổ, chi tiết phiếu, Excel.
     /// Phạm vi theo data_scope: TOAN_TINH; DIA_BAN (v_donvi_diaban); DON_VI (7 ký tự đầu ma_dv); TO_QL (ma_toql = toàn bộ
     /// ma_dv của người dùng); NHAN_VIEN (phiếu của mình; trạm thuộc tổ của mình).
-    /// Ảnh lưu MinIO (kho ảnh điểm danh), khoá "5s/yyyy-MM/{phieu}_{anh}.jpg".
+    /// Ảnh lưu MinIO bucket riêng ttht-5s, khoá "yyyy-MM/{phieu}_{anh}.jpg" (ảnh cũ "5s/..." nằm ở bucket điểm danh).
     /// </summary>
     public class NamSService : INamSService
     {
@@ -32,12 +32,12 @@ namespace DTNTB.Infrastructure.Services
         private const int MaxGiaoMotLan = 500;
         private const int MaxExportRows = 50000;
         private static readonly System.Text.RegularExpressions.Regex ImageKeyPattern =
-            new(@"^5s/\d{4}-\d{2}/\d+_\d+\.jpg$", System.Text.RegularExpressions.RegexOptions.Compiled);
+            new(@"^(5s/)?\d{4}-\d{2}/\d+_\d+\.jpg$", System.Text.RegularExpressions.RegexOptions.Compiled);
         private static readonly StringComparer Vi = StringComparer.Create(new CultureInfo("vi-VN"), true);
 
         private readonly string _connString;
         private readonly ICurrentUserService _currentUser;
-        private readonly IDiemDanhImageStore _imageStore;
+        private readonly INamSImageStore _imageStore;
         private readonly ILogger<NamSService> _logger;
         private readonly long _maxImageBytes;
         private readonly int _maxDimension;
@@ -47,7 +47,7 @@ namespace DTNTB.Infrastructure.Services
         private readonly int _xaTramMet;
         private readonly List<NamSXepLoaiDto> _xepLoai;
 
-        public NamSService(IConfiguration config, ICurrentUserService currentUser, IDiemDanhImageStore imageStore, ILogger<NamSService> logger)
+        public NamSService(IConfiguration config, ICurrentUserService currentUser, INamSImageStore imageStore, ILogger<NamSService> logger)
         {
             _connString = config.GetConnectionString("ConnectionString_NBH") ?? string.Empty;
             _currentUser = currentUser;
@@ -456,17 +456,30 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<bool> XoaPhieuTuTaoAsync(long phieuId, CancellationToken ct = default)
         {
+            var p = OwnParams(new { id = phieuId });
+            return await XoaPhieuCoreAsync(phieuId, $@"
+                SELECT p.phieu_id FROM dtntb_5s_phieu p
+                WHERE p.phieu_id = :id AND {OwnSql("p")} AND p.trang_thai = 'DA_GIAO'
+                  AND UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan))
+                FOR UPDATE", p, "tự tạo", ct);
+        }
+
+        public async Task<bool> XoaPhieuAsync(long phieuId, CancellationToken ct = default)
+        {
+            var p = new DynamicParameters();
+            p.Add("id", phieuId);
+            var scope = PhieuScope(p, "p");
+            return await XoaPhieuCoreAsync(phieuId, $"SELECT p.phieu_id FROM dtntb_5s_phieu p WHERE p.phieu_id = :id AND {scope} FOR UPDATE", p, "", ct);
+        }
+
+        private async Task<bool> XoaPhieuCoreAsync(long phieuId, string sqlKhoa, DynamicParameters p, string loai, CancellationToken ct)
+        {
             List<string> keys;
             await using (var conn = new OracleConnection(_connString))
             {
                 await conn.OpenAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
-                var p = OwnParams(new { id = phieuId });
-                var ok = await conn.ExecuteScalarAsync<long?>($@"
-                    SELECT p.phieu_id FROM dtntb_5s_phieu p
-                    WHERE p.phieu_id = :id AND {OwnSql("p")} AND p.trang_thai = 'DA_GIAO'
-                      AND UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan))
-                    FOR UPDATE", p, tx);
+                var ok = await conn.ExecuteScalarAsync<long?>(sqlKhoa, p, tx);
                 if (ok == null) { await tx.RollbackAsync(ct); return false; }
                 keys = (await conn.QueryAsync<string>("SELECT image_path FROM dtntb_5s_anh WHERE phieu_id = :id", new { id = phieuId }, tx)).ToList();
                 await conn.ExecuteAsync("DELETE FROM dtntb_5s_diem WHERE phieu_id = :id", new { id = phieuId }, tx);
@@ -475,7 +488,7 @@ namespace DTNTB.Infrastructure.Services
                 await tx.CommitAsync(CancellationToken.None);
             }
             await DeleteImagesQuietlyAsync(keys);
-            _logger.LogInformation("{User} xoá phiếu 5S tự tạo {Id}.", Username(), phieuId);
+            _logger.LogInformation("{User} xoá phiếu 5S {Loai} {Id}.", Username(), loai, phieuId);
             return true;
         }
 
@@ -647,7 +660,7 @@ namespace DTNTB.Infrastructure.Services
                 var nguon = lat == null ? null : (string.Equals(meta.Nguon, "EXIF", StringComparison.OrdinalIgnoreCase) ? "EXIF" : "THIET_BI");
 
                 var anhId = await conn.ExecuteScalarAsync<long>("SELECT seq_dtntb_5s_anh.NEXTVAL FROM dual");
-                var key = $"5s/{thang}/{phieuId}_{anhId}.jpg";
+                var key = $"{thang}/{phieuId}_{anhId}.jpg";   // bucket riêng ttht-5s
                 await _imageStore.SaveAsync(key, jpeg, "image/jpeg", ct);
                 try
                 {
