@@ -78,6 +78,20 @@ namespace DTNTB.API.Controllers
         public async Task<IActionResult> GetNhanVien([FromQuery] string? maDv, [FromQuery] string? maToQl)
             => await Run(() => _service.GetNhanVienAsync(maDv, maToQl));
 
+        [HttpGet("nv/don-vi")]
+        public async Task<IActionResult> GetNvDonVi()
+        {
+            if (!CoQuanLy) return Forbid();
+            return await Run(() => _service.GetNvDonViAsync());
+        }
+
+        [HttpGet("nv/to")]
+        public async Task<IActionResult> GetNvTo([FromQuery] string? maDv)
+        {
+            if (!CoQuanLy) return Forbid();
+            return await Run(() => _service.GetNvToAsync(maDv));
+        }
+
         [HttpPost("giao")]
         [Authorize(Policy = AppPermissions.NAMS.GIAO)]
         public async Task<IActionResult> Giao([FromBody] NamSGiaoRequestDto request)
@@ -122,6 +136,23 @@ namespace DTNTB.API.Controllers
         [Authorize(Policy = AppPermissions.NAMS.THUC_HIEN)]
         public async Task<IActionResult> TuTao([FromBody] NamSTuTaoRequestDto request)
             => await Run(() => _service.TuTaoAsync(request ?? new NamSTuTaoRequestDto()));
+
+        /// <summary>Xoá phiếu tự tạo chưa nộp của chính mình.</summary>
+        [HttpDelete("phieu/{id:long}")]
+        [Authorize(Policy = AppPermissions.NAMS.THUC_HIEN)]
+        public async Task<IActionResult> XoaPhieuTuTao(long id, CancellationToken ct)
+        {
+            try
+            {
+                return await _service.XoaPhieuTuTaoAsync(id, ct)
+                    ? NoContent()
+                    : NotFound(new { message = "Chỉ xoá được phiếu tự tạo của bạn và chưa nộp." });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return Fail(ex, "Chưa xoá được phiếu.");
+            }
+        }
 
         [HttpGet("phieu/{id:long}")]
         public async Task<IActionResult> GetPhieu(long id)

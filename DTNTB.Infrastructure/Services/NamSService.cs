@@ -185,6 +185,52 @@ namespace DTNTB.Infrastructure.Services
             return rows.OrderBy(x => x.TenNv ?? x.MaNd, Vi).ToList();
         }
 
+        public async Task<List<NamSOptionDto>> GetNvDonViAsync()
+        {
+            // Giống màn theo dõi điểm danh: đơn vị từ v_donvi_diaban theo phạm vi người xem.
+            var p = new DynamicParameters();
+            string where;
+            switch (_currentUser.ScopeLevel)
+            {
+                case UserDataScopeLevel.ToanTinh:
+                    where = "1 = 1";
+                    break;
+                case UserDataScopeLevel.DiaBan:
+                    if (string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return new List<NamSOptionDto>();
+                    where = "TRIM(TO_CHAR(db.diaban_id)) = :sc_diaban";
+                    p.Add("sc_diaban", _currentUser.DiaBanId.Trim());
+                    break;
+                default:
+                    if (string.IsNullOrWhiteSpace(_currentUser.MaDv7)) return new List<NamSOptionDto>();
+                    where = "SUBSTR(TRIM(db.ma_dv), 1, 7) = :sc_dv";
+                    p.Add("sc_dv", _currentUser.MaDv7.Trim());
+                    break;
+            }
+            await using var conn = new OracleConnection(_connString);
+            var rows = await conn.QueryAsync<NamSOptionDto>($@"
+                SELECT SUBSTR(TRIM(db.ma_dv), 1, 7) AS Ma, MAX(db.ten_dv) AS Ten
+                FROM v_donvi_diaban db WHERE db.ma_dv IS NOT NULL AND {where}
+                GROUP BY SUBSTR(TRIM(db.ma_dv), 1, 7)", p);
+            return rows.OrderBy(x => x.Ten ?? x.Ma, Vi).ToList();
+        }
+
+        public async Task<List<NamSOptionDto>> GetNvToAsync(string? maDv)
+        {
+            // Tổ = toàn bộ ma_dv của nhân viên đang hoạt động, tên lấy từ v_donvi.
+            var p = new DynamicParameters();
+            var where = new List<string> { UserScope(p, "a"), "a.ma_dv IS NOT NULL", "a.trangthai_id = 1" };
+            AddMaDvFilter(where, p, "a.ma_dv", maDv);
+            await using var conn = new OracleConnection(_connString);
+            var rows = await conn.QueryAsync<NamSOptionDto>($@"
+                SELECT TRIM(a.ma_dv) AS Ma, MAX(t.ten_dv) AS Ten
+                FROM v_nguoidung_diaban a
+                LEFT JOIN v_donvi t ON TRIM(a.ma_dv) = TRIM(t.ma_dv)
+                WHERE {string.Join(" AND ", where)}
+                GROUP BY TRIM(a.ma_dv)", p);
+            return rows.Select(x => new NamSOptionDto { Ma = x.Ma, Ten = string.IsNullOrWhiteSpace(x.Ten) ? x.Ma : x.Ten.Trim() })
+                       .OrderBy(x => x.Ten, Vi).ToList();
+        }
+
         public async Task<NamSKetQuaGiaoDto> GiaoAsync(NamSGiaoRequestDto request)
         {
             var dsTram = (request.MaCsht ?? new List<string>()).Select(x => (x ?? string.Empty).Trim()).Where(x => x.Length > 0).Distinct().ToList();
@@ -274,19 +320,8 @@ namespace DTNTB.Infrastructure.Services
         // NHÂN VIÊN TỰ TẠO PHIẾU (đi qua trạm không có trong danh sách được giao)
         // ============================================================
 
-        /// <summary>
-        /// Phạm vi trạm được tự tạo phiếu: cấp tỉnh / địa bàn theo phạm vi thường; cấp đơn vị, tổ, nhân viên
-        /// được tạo cho mọi trạm trong đơn vị (7 ký tự) để đi qua trạm tổ bạn vẫn làm được.
-        /// </summary>
-        private string TuTaoScope(DynamicParameters p, string a)
-        {
-            if (_currentUser.ScopeLevel is UserDataScopeLevel.ToanTinh or UserDataScopeLevel.DiaBan) return TramScope(p, a);
-            var dv7 = !string.IsNullOrWhiteSpace(_currentUser.MaDv7) ? _currentUser.MaDv7.Trim()
-                    : (_currentUser.MaDv?.Trim() is { Length: >= 7 } dv ? dv[..7] : null);
-            if (string.IsNullOrEmpty(dv7)) return "1 = 0";
-            p.Add("tt_dv", dv7);
-            return $"SUBSTR(TRIM({a}.ma_dv), 1, 7) = :tt_dv";
-        }
+        /// <summary>Tự tạo phiếu được ở mọi trạm trong DTNTB_CSHT (đi qua trạm đơn vị khác vẫn làm được).</summary>
+        private static string TuTaoScope(DynamicParameters p, string a) => "1 = 1";
 
         public async Task<List<NamSTramTuTaoDto>> TimTramTuTaoAsync(string? search, double? lat, double? lng)
         {
@@ -417,6 +452,31 @@ namespace DTNTB.Infrastructure.Services
             public int SoKem { get; set; }
             public int SoAnh { get; set; }
             public int SoAnhCanhBao { get; set; }
+        }
+
+        public async Task<bool> XoaPhieuTuTaoAsync(long phieuId, CancellationToken ct = default)
+        {
+            List<string> keys;
+            await using (var conn = new OracleConnection(_connString))
+            {
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                var p = OwnParams(new { id = phieuId });
+                var ok = await conn.ExecuteScalarAsync<long?>($@"
+                    SELECT p.phieu_id FROM dtntb_5s_phieu p
+                    WHERE p.phieu_id = :id AND {OwnSql("p")} AND p.trang_thai = 'DA_GIAO'
+                      AND UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan))
+                    FOR UPDATE", p, tx);
+                if (ok == null) { await tx.RollbackAsync(ct); return false; }
+                keys = (await conn.QueryAsync<string>("SELECT image_path FROM dtntb_5s_anh WHERE phieu_id = :id", new { id = phieuId }, tx)).ToList();
+                await conn.ExecuteAsync("DELETE FROM dtntb_5s_diem WHERE phieu_id = :id", new { id = phieuId }, tx);
+                await conn.ExecuteAsync("DELETE FROM dtntb_5s_anh WHERE phieu_id = :id", new { id = phieuId }, tx);
+                await conn.ExecuteAsync("DELETE FROM dtntb_5s_phieu WHERE phieu_id = :id", new { id = phieuId }, tx);
+                await tx.CommitAsync(CancellationToken.None);
+            }
+            await DeleteImagesQuietlyAsync(keys);
+            _logger.LogInformation("{User} xoá phiếu 5S tự tạo {Id}.", Username(), phieuId);
+            return true;
         }
 
         private sealed class PhieuMoRow
@@ -811,37 +871,61 @@ namespace DTNTB.Infrastructure.Services
 
         public async Task<List<NamSTongHopNvDto>> GetTongHopNhanVienAsync(NamSPhieuQueryDto query)
         {
+            // Đơn vị / tổ theo NHÂN VIÊN (ma_dv trong v_nguoidung_diaban, tài khoản đang hoạt động), không theo trạm.
+            // Thấy được phiếu trong phạm vi trạm, hoặc phiếu của nhân viên thuộc phạm vi mình quản lý.
             var p = new DynamicParameters();
-            var where = new List<string> { PhieuScope(p, "p"), "p.trang_thai <> 'THU_HOI'", ThoiGianClause(p, query) };
-            AddMaDvFilter(where, p, "p.ma_dv", query.MaDv);
-            if (!string.IsNullOrWhiteSpace(query.MaToQl))
+            var scopePhieu = PhieuScope(p, "p");
+            var scopeNv = ScopeClause(p, "p.nv_ma_dv", "p.nv_ma_dv", null);
+            var where = new List<string> { $"(({scopePhieu}) OR (p.nv_ma_dv IS NOT NULL AND {scopeNv}))", "p.trang_thai <> 'THU_HOI'", ThoiGianClause(p, query) };
+            AddMaDvFilter(where, p, "p.nv_ma_dv", string.IsNullOrWhiteSpace(query.NvMaDv) ? query.MaDv : query.NvMaDv);
+            if (!string.IsNullOrWhiteSpace(query.NvMaTo))
             {
-                ValidateCode(query.MaToQl, "Mã tổ");
-                where.Add("p.ma_toql = :f_to");
-                p.Add("f_to", query.MaToQl.Trim());
+                ValidateCode(query.NvMaTo, "Mã tổ");
+                where.Add("p.nv_ma_dv = :f_nvto");
+                p.Add("f_nvto", query.NvMaTo.Trim());
             }
             await using var conn = new OracleConnection(_connString);
-            // Gom theo nhân viên + tổ của trạm ở SQL, rồi gộp theo nhân viên ở đây (tránh LISTAGG DISTINCT, cần Oracle 19c).
             var rows = await conn.QueryAsync<TongHopNvRow>($@"
-                SELECT NVL(UPPER(TRIM(p.ma_nv_nhan)), UPPER(TRIM(p.ma_nd_nhan))) AS Khoa,
-                       MAX(TRIM(p.ma_nv_nhan)) AS MaNv, MAX(TRIM(p.ma_nd_nhan)) AS MaNd, MAX(p.ten_nv_nhan) AS TenNv,
-                       MAX(p.ten_dv) AS TenDv, MAX(p.ten_toql) AS TenToQl,
-                       COUNT(1) AS SoPhieuGiao,
-                       SUM(CASE WHEN UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan)) THEN 1 ELSE 0 END) AS SoTuTao,
-                       SUM(CASE WHEN p.trang_thai = 'DA_GIAO' THEN 1 ELSE 0 END) AS SoDangLam,
-                       SUM(CASE WHEN p.trang_thai IN ('DA_NOP', 'DA_CHAM') THEN 1 ELSE 0 END) AS SoDaNop,
-                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.diem_toi_da > 0 THEN 1 ELSE 0 END) AS SoCoDiem,
-                       ROUND(SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.diem_toi_da > 0 THEN p.tong_diem * 100 / p.diem_toi_da ELSE 0 END), 4) AS TongPhanTram,
-                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' THEN 1 ELSE 0 END) AS SoDaCham,
-                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'TOT' THEN 1 ELSE 0 END) AS SoTot,
-                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'KHA' THEN 1 ELSE 0 END) AS SoKha,
-                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'TB' THEN 1 ELSE 0 END) AS SoTb,
-                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'KEM' THEN 1 ELSE 0 END) AS SoKem,
-                       SUM((SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id)) AS SoAnh,
-                       SUM((SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id AND a.canh_bao IS NOT NULL)) AS SoAnhCanhBao
-                FROM dtntb_5s_phieu p
-                WHERE {string.Join(" AND ", where)}
-                GROUP BY NVL(UPPER(TRIM(p.ma_nv_nhan)), UPPER(TRIM(p.ma_nd_nhan))), p.ma_toql", p, commandTimeout: 120);
+                WITH n1 AS (
+                    SELECT UPPER(TRIM(ma_nv)) AS k, MAX(TRIM(ma_dv)) AS ma_dv FROM v_nguoidung_diaban
+                    WHERE trangthai_id = 1 AND ma_nv IS NOT NULL GROUP BY UPPER(TRIM(ma_nv))
+                ),
+                n2 AS (
+                    SELECT UPPER(TRIM(ma_nd)) AS k, MAX(TRIM(ma_dv)) AS ma_dv FROM v_nguoidung_diaban
+                    WHERE ma_nd IS NOT NULL GROUP BY UPPER(TRIM(ma_nd))
+                ),
+                agg AS (
+                    SELECT NVL(UPPER(TRIM(p.ma_nv_nhan)), UPPER(TRIM(p.ma_nd_nhan))) AS khoa, p.nv_ma_dv,
+                           MAX(TRIM(p.ma_nv_nhan)) AS ma_nv, MAX(TRIM(p.ma_nd_nhan)) AS ma_nd, MAX(p.ten_nv_nhan) AS ten_nv,
+                           COUNT(1) AS so_phieu,
+                           SUM(CASE WHEN UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan)) THEN 1 ELSE 0 END) AS so_tu_tao,
+                           SUM(CASE WHEN p.trang_thai = 'DA_GIAO' THEN 1 ELSE 0 END) AS so_dang_lam,
+                           SUM(CASE WHEN p.trang_thai IN ('DA_NOP', 'DA_CHAM') THEN 1 ELSE 0 END) AS so_nop,
+                           SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.diem_toi_da > 0 THEN 1 ELSE 0 END) AS so_co_diem,
+                           ROUND(SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.diem_toi_da > 0 THEN p.tong_diem * 100 / p.diem_toi_da ELSE 0 END), 4) AS tong_pct,
+                           SUM(CASE WHEN p.trang_thai = 'DA_CHAM' THEN 1 ELSE 0 END) AS so_cham,
+                           SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'TOT' THEN 1 ELSE 0 END) AS so_tot,
+                           SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'KHA' THEN 1 ELSE 0 END) AS so_kha,
+                           SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'TB' THEN 1 ELSE 0 END) AS so_tb,
+                           SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'KEM' THEN 1 ELSE 0 END) AS so_kem,
+                           SUM((SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id)) AS so_anh,
+                           SUM((SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id AND a.canh_bao IS NOT NULL)) AS so_anh_cb
+                    FROM (
+                        SELECT x.*, NVL(n1.ma_dv, n2.ma_dv) AS nv_ma_dv
+                        FROM dtntb_5s_phieu x
+                        LEFT JOIN n1 ON n1.k = UPPER(TRIM(x.ma_nv_nhan))
+                        LEFT JOIN n2 ON n2.k = UPPER(TRIM(x.ma_nd_nhan))
+                    ) p
+                    WHERE {string.Join(" AND ", where)}
+                    GROUP BY NVL(UPPER(TRIM(p.ma_nv_nhan)), UPPER(TRIM(p.ma_nd_nhan))), p.nv_ma_dv
+                )
+                SELECT g.khoa AS Khoa, g.ma_nv AS MaNv, g.ma_nd AS MaNd, g.ten_nv AS TenNv,
+                       (SELECT MAX(db.ten_dv) FROM v_donvi_diaban db WHERE SUBSTR(TRIM(db.ma_dv), 1, 7) = SUBSTR(g.nv_ma_dv, 1, 7)) AS TenDv,
+                       NVL((SELECT MAX(t.ten_dv) FROM v_donvi t WHERE TRIM(t.ma_dv) = g.nv_ma_dv), g.nv_ma_dv) AS TenToQl,
+                       g.so_phieu AS SoPhieuGiao, g.so_tu_tao AS SoTuTao, g.so_dang_lam AS SoDangLam, g.so_nop AS SoDaNop,
+                       g.so_co_diem AS SoCoDiem, g.tong_pct AS TongPhanTram, g.so_cham AS SoDaCham, g.so_tot AS SoTot, g.so_kha AS SoKha,
+                       g.so_tb AS SoTb, g.so_kem AS SoKem, g.so_anh AS SoAnh, g.so_anh_cb AS SoAnhCanhBao
+                FROM agg g", p, commandTimeout: 120);
 
             return rows.GroupBy(r => r.Khoa).Select(g =>
             {
@@ -909,7 +993,7 @@ namespace DTNTB.Infrastructure.Services
 
             var theoNv = await GetTongHopNhanVienAsync(query);
             var wn = wb.Worksheets.Add("TheoNhanVien");
-            Header(wn, 1, "STT", "Nhân viên", "Mã NV", "Đơn vị", "Tổ (trạm đã làm)", "Phiếu", "Tự tạo", "Đang làm", "Đã nộp", "Đã chấm",
+            Header(wn, 1, "STT", "Nhân viên", "Mã NV", "Đơn vị", "Tổ", "Phiếu", "Tự tạo", "Đang làm", "Đã nộp", "Đã chấm",
                    "Điểm TB (%)", "Tốt", "Khá", "Trung bình", "Kém", "Số ảnh", "Ảnh cảnh báo");
             r = 2;
             foreach (var x in theoNv)
@@ -1196,7 +1280,8 @@ namespace DTNTB.Infrastructure.Services
             p.diem_toi_da AS DiemToiDa, p.xep_loai AS XepLoai, p.nhan_xet AS NhanXet, p.ten_nguoi_cham AS TenNguoiCham,
             p.ngay_cham AS NgayCham,
             (SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id) AS SoAnh,
-            (SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id AND a.canh_bao IS NOT NULL) AS SoAnhCanhBao";
+            (SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id AND a.canh_bao IS NOT NULL) AS SoAnhCanhBao,
+            CASE WHEN UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan)) THEN 1 ELSE 0 END AS TuTaoSo";
 
         private const string AnhColumns = @"a.anh_id AS AnhId, a.tieuchi_id AS TieuChiId, a.file_name AS FileName, a.ngay_tai AS NgayTai,
             a.chup_luc AS ChupLuc, a.latitude AS Latitude, a.longitude AS Longitude, a.nguon_toado AS NguonToaDo,

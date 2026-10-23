@@ -14,6 +14,9 @@ namespace DTNTB.Core.Interfaces
         // Giao
         Task<List<NamSTramDto>> GetTramAsync(NamSTramQueryDto query);
         Task<List<NamSNhanVienDto>> GetNhanVienAsync(string? maDv, string? maToQl);
+        /// <summary>Đơn vị / tổ của nhân sự (để chọn người nhận phiếu), theo phạm vi người xem.</summary>
+        Task<List<NamSOptionDto>> GetNvDonViAsync();
+        Task<List<NamSOptionDto>> GetNvToAsync(string? maDv);
         Task<NamSKetQuaGiaoDto> GiaoAsync(NamSGiaoRequestDto request);
         Task<bool> ThuHoiAsync(long phieuId, CancellationToken ct = default);
         Task<List<NamSPhieuDto>> GetPhieuDangGiaoAsync(NamSTramQueryDto query);
@@ -24,6 +27,8 @@ namespace DTNTB.Core.Interfaces
         Task<List<NamSTramTuTaoDto>> TimTramTuTaoAsync(string? search, double? lat, double? lng);
         /// <summary>Nhân viên tự tạo phiếu 5S cho mình ở trạm không được giao. Trả phiếu (hoặc phiếu đang mở của chính mình).</summary>
         Task<NamSPhieuDto> TuTaoAsync(NamSTuTaoRequestDto request);
+        /// <summary>Xoá phiếu tự tạo chưa nộp của chính mình (kèm ảnh).</summary>
+        Task<bool> XoaPhieuTuTaoAsync(long phieuId, CancellationToken ct = default);
         Task<NamSPhieuChiTietDto?> GetPhieuAsync(long phieuId);
         Task<List<NamSAnhDto>> UploadAnhAsync(long phieuId, int tieuChiId, IReadOnlyList<IFormFile> files, string? metaJson, CancellationToken ct = default);
         Task<bool> XoaAnhAsync(long anhId, CancellationToken ct = default);

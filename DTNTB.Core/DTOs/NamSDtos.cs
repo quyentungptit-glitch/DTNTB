@@ -147,6 +147,9 @@
         public int SoAnh { get; set; }
         /// <summary>Số ảnh có cảnh báo (xa trạm, không GPS, trùng ảnh).</summary>
         public int SoAnhCanhBao { get; set; }
+        /// <summary>Nhân viên tự tạo (người giao = người nhận).</summary>
+        public bool TuTao => TuTaoSo == 1;
+        [System.Text.Json.Serialization.JsonIgnore] public int TuTaoSo { get; set; }
     }
 
     public class NamSAnhDto
@@ -218,6 +221,9 @@
         /// <summary>Lọc theo ngày giao (ưu tiên hơn TuThang/DenThang khi có).</summary>
         public DateTime? TuNgay { get; set; }
         public DateTime? DenNgay { get; set; }
+        /// <summary>Báo cáo theo nhân viên: lọc theo đơn vị (7 ký tự) / tổ (ma_dv) của nhân viên.</summary>
+        public string? NvMaDv { get; set; }
+        public string? NvMaTo { get; set; }
         public string? MaDv { get; set; }
         public string? MaToQl { get; set; }
         /// <summary>DA_GIAO | DA_NOP | DA_CHAM | NOP_CHAM (đã nộp hoặc đã chấm) | bỏ trống = tất cả (trừ thu hồi)</summary>
