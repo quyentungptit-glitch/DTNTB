@@ -148,7 +148,7 @@ namespace DTNTB.Infrastructure.Services
         public async Task<List<NamSNhanVienDto>> GetNhanVienAsync(string? maDv, string? maToQl)
         {
             var p = new DynamicParameters();
-            var where = new List<string> { UserScope(p, "u"), "u.ma_nd IS NOT NULL" };
+            var where = new List<string> { UserScope(p, "u"), "u.ma_nd IS NOT NULL", "u.trangthai_id = 1" };
             AddMaDvFilter(where, p, "u.ma_dv", maDv);
             if (!string.IsNullOrWhiteSpace(maToQl))
             {
@@ -157,14 +157,31 @@ namespace DTNTB.Infrastructure.Services
                 p.Add("f_to", maToQl.Trim());
             }
 
+            // Một nhân viên (ma_nv) có thể có nhiều tài khoản trong v_nguoidung_diaban: gộp còn 1 dòng, ưu tiên tài khoản
+            // đã được phân quyền 5S trên DTNTB, rồi tài khoản có vai trò DTNTB bất kỳ.
+            p.Add("perm_th", AppPermissions.NAMS.THUC_HIEN);
             await using var conn = new OracleConnection(_connString);
             var rows = await conn.QueryAsync<NamSNhanVienDto>($@"
-                SELECT TRIM(u.ma_nd) AS MaNd, MAX(TRIM(u.ma_nv)) AS MaNv, MAX(u.ten_nv) AS TenNv, MAX(TRIM(u.ma_dv)) AS MaDv,
+                WITH u0 AS (
+                    SELECT TRIM(u.ma_nd) AS ma_nd, TRIM(u.ma_nv) AS ma_nv, u.ten_nv, TRIM(u.ma_dv) AS ma_dv,
+                           CASE WHEN EXISTS (SELECT 1 FROM dtntb_sys_user_roles ur
+                                             JOIN dtntb_sys_role_permissions rp ON rp.role_code = ur.role_code
+                                             WHERE UPPER(TRIM(ur.ma_nd)) = UPPER(TRIM(u.ma_nd)) AND rp.permission_code = :perm_th) THEN 2
+                                WHEN EXISTS (SELECT 1 FROM dtntb_sys_user_roles ur WHERE UPPER(TRIM(ur.ma_nd)) = UPPER(TRIM(u.ma_nd))) THEN 1
+                                ELSE 0 END AS uu_tien
+                    FROM v_nguoidung_diaban u
+                    WHERE {string.Join(" AND ", where)}
+                ),
+                u1 AS (
+                    SELECT u0.*, ROW_NUMBER() OVER (PARTITION BY NVL(UPPER(u0.ma_nv), UPPER(u0.ma_nd))
+                                                    ORDER BY u0.uu_tien DESC, u0.ma_nd) AS rn
+                    FROM u0
+                )
+                SELECT u1.ma_nd AS MaNd, u1.ma_nv AS MaNv, u1.ten_nv AS TenNv, u1.ma_dv AS MaDv,
                        (SELECT COUNT(1) FROM dtntb_5s_phieu x
-                         WHERE UPPER(x.ma_nd_nhan) = UPPER(TRIM(u.ma_nd)) AND x.trang_thai = 'DA_GIAO') AS SoPhieuMo
-                FROM v_nguoidung_diaban u
-                WHERE {string.Join(" AND ", where)}
-                GROUP BY TRIM(u.ma_nd)", p);
+                         WHERE x.trang_thai = 'DA_GIAO'
+                           AND (UPPER(x.ma_nd_nhan) = UPPER(u1.ma_nd) OR (u1.ma_nv IS NOT NULL AND TRIM(x.ma_nv_nhan) = u1.ma_nv))) AS SoPhieuMo
+                FROM u1 WHERE u1.rn = 1", p);
             return rows.OrderBy(x => x.TenNv ?? x.MaNd, Vi).ToList();
         }
 
@@ -317,16 +334,15 @@ namespace DTNTB.Infrastructure.Services
 
             // Phiếu đang mở của các trạm tìm được
             var mo = (await conn.QueryAsync<PhieuMoRow>(@"
-                SELECT p.ma_csht AS MaCsht, p.phieu_id AS PhieuId, p.ten_nv_nhan AS Ten, p.ma_nd_nhan AS MaNd FROM dtntb_5s_phieu p
+                SELECT p.ma_csht AS MaCsht, p.phieu_id AS PhieuId, p.ten_nv_nhan AS Ten, p.ma_nd_nhan AS MaNd, p.ma_nv_nhan AS MaNv FROM dtntb_5s_phieu p
                 WHERE p.trang_thai = 'DA_GIAO' AND p.ma_csht IN :ds", new { ds = ketQua.Select(x => x.MaCsht).ToList() }))
                 .GroupBy(x => x.MaCsht).ToDictionary(g => g.Key, g => g.First());
-            var me = Username();
             foreach (var x in ketQua)
             {
                 if (!mo.TryGetValue(x.MaCsht, out var m)) continue;
                 x.PhieuMoId = m.PhieuId;
                 x.NvMo = m.Ten ?? m.MaNd;
-                x.PhieuCuaToi = string.Equals(m.MaNd?.Trim(), me, StringComparison.OrdinalIgnoreCase);
+                x.PhieuCuaToi = LaCuaToi(m.MaNd, m.MaNv);
             }
             return ketQua;
         }
@@ -355,11 +371,11 @@ namespace DTNTB.Infrastructure.Services
                         ?? throw new NamSValidationException("Trạm không thuộc đơn vị của bạn.");
 
                     var mo = await conn.QueryFirstOrDefaultAsync<PhieuMoRow>(@"
-                        SELECT ma_csht AS MaCsht, phieu_id AS PhieuId, ma_nd_nhan AS MaNd, ten_nv_nhan AS Ten FROM dtntb_5s_phieu
+                        SELECT ma_csht AS MaCsht, phieu_id AS PhieuId, ma_nd_nhan AS MaNd, ma_nv_nhan AS MaNv, ten_nv_nhan AS Ten FROM dtntb_5s_phieu
                         WHERE ma_csht = :ma AND trang_thai = 'DA_GIAO' AND ROWNUM = 1", new { ma = maCsht }, tx);
                     if (mo != null)
                     {
-                        if (!string.Equals(mo.MaNd?.Trim(), me, StringComparison.OrdinalIgnoreCase))
+                        if (!LaCuaToi(mo.MaNd, mo.MaNv))
                             throw new NamSValidationException($"Trạm đang được giao cho {mo.Ten ?? mo.MaNd}, chưa tạo thêm phiếu được.");
                         phieuId = mo.PhieuId;   // đã có phiếu của chính mình: mở lại phiếu đó
                     }
@@ -380,12 +396,36 @@ namespace DTNTB.Infrastructure.Services
             return await conn.QueryFirstAsync<NamSPhieuDto>($"SELECT {PhieuColumns} FROM dtntb_5s_phieu p WHERE p.phieu_id = :id", new { id = phieuId });
         }
 
+        private sealed class TongHopNvRow
+        {
+            public string Khoa { get; set; } = string.Empty;
+            public string? MaNv { get; set; }
+            public string? MaNd { get; set; }
+            public string? TenNv { get; set; }
+            public string? TenDv { get; set; }
+            public string? TenToQl { get; set; }
+            public int SoPhieuGiao { get; set; }
+            public int SoTuTao { get; set; }
+            public int SoDangLam { get; set; }
+            public int SoDaNop { get; set; }
+            public int SoCoDiem { get; set; }
+            public decimal TongPhanTram { get; set; }
+            public int SoDaCham { get; set; }
+            public int SoTot { get; set; }
+            public int SoKha { get; set; }
+            public int SoTb { get; set; }
+            public int SoKem { get; set; }
+            public int SoAnh { get; set; }
+            public int SoAnhCanhBao { get; set; }
+        }
+
         private sealed class PhieuMoRow
         {
             public string MaCsht { get; set; } = string.Empty;
             public long PhieuId { get; set; }
             public string? Ten { get; set; }
             public string? MaNd { get; set; }
+            public string? MaNv { get; set; }
         }
 
         private sealed class TramTuTaoRow
@@ -449,8 +489,8 @@ namespace DTNTB.Infrastructure.Services
             await using var conn = new OracleConnection(_connString);
             return (await conn.QueryAsync<NamSPhieuDto>($@"
                 SELECT {PhieuColumns} FROM dtntb_5s_phieu p
-                WHERE UPPER(p.ma_nd_nhan) = UPPER(:me) AND p.trang_thai = 'DA_GIAO'
-                ORDER BY p.ngay_giao", new { me = Username() })).ToList();
+                WHERE {OwnSql("p")} AND p.trang_thai = 'DA_GIAO'
+                ORDER BY p.ngay_giao", OwnParams())).ToList();
         }
 
         public async Task<NamSPhieuChiTietDto?> GetPhieuAsync(long phieuId)
@@ -477,7 +517,7 @@ namespace DTNTB.Infrastructure.Services
             var byTc = anh.GroupBy(a => a.TieuChiId).ToDictionary(g => g.Key, g => g.Select(ToAnh).ToList());
             foreach (var tc in tieuChi) tc.Anh = byTc.TryGetValue(tc.TieuChiId, out var list) ? list : new List<NamSAnhDto>();
 
-            var laNguoiNhan = string.Equals(phieu.MaNdNhan?.Trim(), Username(), StringComparison.OrdinalIgnoreCase);
+            var laNguoiNhan = LaCuaToi(phieu.MaNdNhan, phieu.MaNvNhan);
             return new NamSPhieuChiTietDto
             {
                 Phieu = phieu,
@@ -510,8 +550,8 @@ namespace DTNTB.Infrastructure.Services
             await using var conn = new OracleConnection(_connString);
             await conn.OpenAsync(ct);
             var phieu = await conn.QueryFirstOrDefaultAsync<NamSPhieuDto>(
-                $"SELECT {PhieuColumns} FROM dtntb_5s_phieu p WHERE p.phieu_id = :id AND UPPER(p.ma_nd_nhan) = UPPER(:me)",
-                new { id = phieuId, me = Username() });
+                $"SELECT {PhieuColumns} FROM dtntb_5s_phieu p WHERE p.phieu_id = :id AND {OwnSql("p")}",
+                OwnParams(new { id = phieuId }));
             if (phieu == null) throw new NamSValidationException("Không tìm thấy phiếu hoặc phiếu không giao cho bạn.");
             if (phieu.TrangThai != NamSTrangThai.DA_GIAO) throw new NamSValidationException("Phiếu đã nộp hoặc đã thu hồi, không tải thêm ảnh được.");
 
@@ -586,10 +626,10 @@ namespace DTNTB.Infrastructure.Services
             string? key;
             await using (var conn = new OracleConnection(_connString))
             {
-                key = await conn.ExecuteScalarAsync<string?>(@"
+                key = await conn.ExecuteScalarAsync<string?>($@"
                     SELECT a.image_path FROM dtntb_5s_anh a JOIN dtntb_5s_phieu p ON p.phieu_id = a.phieu_id
-                    WHERE a.anh_id = :id AND UPPER(p.ma_nd_nhan) = UPPER(:me) AND p.trang_thai = 'DA_GIAO'",
-                    new { id = anhId, me = Username() });
+                    WHERE a.anh_id = :id AND {OwnSql("p")} AND p.trang_thai = 'DA_GIAO'",
+                    OwnParams(new { id = anhId }));
                 if (key == null) return false;
                 await conn.ExecuteAsync("DELETE FROM dtntb_5s_anh WHERE anh_id = :id", new { id = anhId });
             }
@@ -601,8 +641,8 @@ namespace DTNTB.Infrastructure.Services
         {
             await using var conn = new OracleConnection(_connString);
             var trangThai = await conn.ExecuteScalarAsync<string?>(
-                "SELECT trang_thai FROM dtntb_5s_phieu WHERE phieu_id = :id AND UPPER(ma_nd_nhan) = UPPER(:me)",
-                new { id = phieuId, me = Username() });
+                $"SELECT p.trang_thai FROM dtntb_5s_phieu p WHERE p.phieu_id = :id AND {OwnSql("p")}",
+                OwnParams(new { id = phieuId }));
             if (trangThai == null) return false;
             if (trangThai != NamSTrangThai.DA_GIAO) throw new NamSValidationException("Phiếu đã nộp hoặc đã thu hồi.");
 
@@ -769,6 +809,66 @@ namespace DTNTB.Infrastructure.Services
             return rows.OrderBy(r => r.TenDv ?? r.MaDv, Vi).ThenBy(r => r.TenToQl ?? r.MaToQl, Vi).ToList();
         }
 
+        public async Task<List<NamSTongHopNvDto>> GetTongHopNhanVienAsync(NamSPhieuQueryDto query)
+        {
+            var p = new DynamicParameters();
+            var where = new List<string> { PhieuScope(p, "p"), "p.trang_thai <> 'THU_HOI'", ThoiGianClause(p, query) };
+            AddMaDvFilter(where, p, "p.ma_dv", query.MaDv);
+            if (!string.IsNullOrWhiteSpace(query.MaToQl))
+            {
+                ValidateCode(query.MaToQl, "Mã tổ");
+                where.Add("p.ma_toql = :f_to");
+                p.Add("f_to", query.MaToQl.Trim());
+            }
+            await using var conn = new OracleConnection(_connString);
+            // Gom theo nhân viên + tổ của trạm ở SQL, rồi gộp theo nhân viên ở đây (tránh LISTAGG DISTINCT, cần Oracle 19c).
+            var rows = await conn.QueryAsync<TongHopNvRow>($@"
+                SELECT NVL(UPPER(TRIM(p.ma_nv_nhan)), UPPER(TRIM(p.ma_nd_nhan))) AS Khoa,
+                       MAX(TRIM(p.ma_nv_nhan)) AS MaNv, MAX(TRIM(p.ma_nd_nhan)) AS MaNd, MAX(p.ten_nv_nhan) AS TenNv,
+                       MAX(p.ten_dv) AS TenDv, MAX(p.ten_toql) AS TenToQl,
+                       COUNT(1) AS SoPhieuGiao,
+                       SUM(CASE WHEN UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan)) THEN 1 ELSE 0 END) AS SoTuTao,
+                       SUM(CASE WHEN p.trang_thai = 'DA_GIAO' THEN 1 ELSE 0 END) AS SoDangLam,
+                       SUM(CASE WHEN p.trang_thai IN ('DA_NOP', 'DA_CHAM') THEN 1 ELSE 0 END) AS SoDaNop,
+                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.diem_toi_da > 0 THEN 1 ELSE 0 END) AS SoCoDiem,
+                       ROUND(SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.diem_toi_da > 0 THEN p.tong_diem * 100 / p.diem_toi_da ELSE 0 END), 4) AS TongPhanTram,
+                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' THEN 1 ELSE 0 END) AS SoDaCham,
+                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'TOT' THEN 1 ELSE 0 END) AS SoTot,
+                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'KHA' THEN 1 ELSE 0 END) AS SoKha,
+                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'TB' THEN 1 ELSE 0 END) AS SoTb,
+                       SUM(CASE WHEN p.trang_thai = 'DA_CHAM' AND p.xep_loai = 'KEM' THEN 1 ELSE 0 END) AS SoKem,
+                       SUM((SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id)) AS SoAnh,
+                       SUM((SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id AND a.canh_bao IS NOT NULL)) AS SoAnhCanhBao
+                FROM dtntb_5s_phieu p
+                WHERE {string.Join(" AND ", where)}
+                GROUP BY NVL(UPPER(TRIM(p.ma_nv_nhan)), UPPER(TRIM(p.ma_nd_nhan))), p.ma_toql", p, commandTimeout: 120);
+
+            return rows.GroupBy(r => r.Khoa).Select(g =>
+            {
+                var soCoDiem = g.Sum(x => x.SoCoDiem);
+                return new NamSTongHopNvDto
+                {
+                    MaNv = g.Select(x => x.MaNv).FirstOrDefault(x => !string.IsNullOrEmpty(x)),
+                    MaNd = g.Select(x => x.MaNd).FirstOrDefault(x => !string.IsNullOrEmpty(x)),
+                    TenNv = g.Select(x => x.TenNv).FirstOrDefault(x => !string.IsNullOrEmpty(x)),
+                    TenDv = string.Join(", ", g.Select(x => x.TenDv).Where(x => !string.IsNullOrEmpty(x)).Distinct()),
+                    TenToQl = string.Join(", ", g.OrderByDescending(x => x.SoPhieuGiao).Select(x => x.TenToQl).Where(x => !string.IsNullOrEmpty(x)).Distinct()),
+                    SoPhieuGiao = g.Sum(x => x.SoPhieuGiao),
+                    SoTuTao = g.Sum(x => x.SoTuTao),
+                    SoDangLam = g.Sum(x => x.SoDangLam),
+                    SoDaNop = g.Sum(x => x.SoDaNop),
+                    SoDaCham = g.Sum(x => x.SoDaCham),
+                    DiemTb = soCoDiem > 0 ? Math.Round(g.Sum(x => x.TongPhanTram) / soCoDiem, 1) : null,
+                    SoTot = g.Sum(x => x.SoTot),
+                    SoKha = g.Sum(x => x.SoKha),
+                    SoTb = g.Sum(x => x.SoTb),
+                    SoKem = g.Sum(x => x.SoKem),
+                    SoAnh = g.Sum(x => x.SoAnh),
+                    SoAnhCanhBao = g.Sum(x => x.SoAnhCanhBao)
+                };
+            }).OrderBy(r => r.TenDv ?? "", Vi).ThenBy(r => r.TenNv ?? r.MaNd, Vi).ToList();
+        }
+
         public async Task<byte[]> ExportAsync(NamSPhieuQueryDto query)
         {
             var tongHop = await GetTongHopAsync(query);
@@ -806,6 +906,35 @@ namespace DTNTB.Infrastructure.Services
             }
             ws.Columns().AdjustToContents(3, Math.Max(r, 4), 6, 50);
             ws.SheetView.FreezeRows(3);
+
+            var theoNv = await GetTongHopNhanVienAsync(query);
+            var wn = wb.Worksheets.Add("TheoNhanVien");
+            Header(wn, 1, "STT", "Nhân viên", "Mã NV", "Đơn vị", "Tổ (trạm đã làm)", "Phiếu", "Tự tạo", "Đang làm", "Đã nộp", "Đã chấm",
+                   "Điểm TB (%)", "Tốt", "Khá", "Trung bình", "Kém", "Số ảnh", "Ảnh cảnh báo");
+            r = 2;
+            foreach (var x in theoNv)
+            {
+                wn.Cell(r, 1).Value = (double)(r - 1);
+                wn.Cell(r, 2).Value = Text(x.TenNv ?? x.MaNd);
+                wn.Cell(r, 3).Value = Text(x.MaNv);
+                wn.Cell(r, 4).Value = Text(x.TenDv);
+                wn.Cell(r, 5).Value = Text(x.TenToQl);
+                wn.Cell(r, 6).Value = (double)x.SoPhieuGiao;
+                wn.Cell(r, 7).Value = (double)x.SoTuTao;
+                wn.Cell(r, 8).Value = (double)x.SoDangLam;
+                wn.Cell(r, 9).Value = (double)x.SoDaNop;
+                wn.Cell(r, 10).Value = (double)x.SoDaCham;
+                if (x.DiemTb.HasValue) wn.Cell(r, 11).Value = (double)x.DiemTb.Value;
+                wn.Cell(r, 12).Value = (double)x.SoTot;
+                wn.Cell(r, 13).Value = (double)x.SoKha;
+                wn.Cell(r, 14).Value = (double)x.SoTb;
+                wn.Cell(r, 15).Value = (double)x.SoKem;
+                wn.Cell(r, 16).Value = (double)x.SoAnh;
+                wn.Cell(r, 17).Value = (double)x.SoAnhCanhBao;
+                r++;
+            }
+            wn.Columns().AdjustToContents(1, Math.Max(r, 2), 6, 50);
+            wn.SheetView.FreezeRows(1);
 
             var ct = wb.Worksheets.Add("ChiTiet");
             Header(ct, 1, "STT", "Tháng", "Lần", "Mã CSHT", "Tên trạm", "Đơn vị", "Tổ quản lý", "Địa chỉ", "NV thực hiện", "Ngày giao",
@@ -885,6 +1014,11 @@ namespace DTNTB.Infrastructure.Services
                         return $"TRIM({maToCol}) = :sc_to";
                     }
                     p.Add("sc_nd", Username());
+                    if (maNdCol.EndsWith(".ma_nd_nhan", StringComparison.Ordinal) && MaNvCuaToi() is { } nvToi)
+                    {
+                        p.Add("sc_nv", nvToi);
+                        return $"(UPPER(TRIM({maNdCol})) = UPPER(:sc_nd) OR TRIM({maNdCol[..^".ma_nd_nhan".Length]}.ma_nv_nhan) = :sc_nv)";
+                    }
                     return $"UPPER(TRIM({maNdCol})) = UPPER(:sc_nd)";
             }
         }
@@ -892,8 +1026,9 @@ namespace DTNTB.Infrastructure.Services
         /// <summary>Người được giao luôn xem được phiếu của mình; người khác cần quyền giao/chấm/báo cáo và trong phạm vi.</summary>
         private string AccessClause(DynamicParameters p, string a)
         {
-            p.Add("ac_me", Username());
-            var own = $"UPPER(TRIM({a}.ma_nd_nhan)) = UPPER(:ac_me)";
+            p.Add("me", Username());
+            p.Add("me_nv", MaNvCuaToi(), DbType.String);
+            var own = OwnSql(a);
             var quanLy = _currentUser.HasPermission(AppPermissions.NAMS.GIAO)
                          || _currentUser.HasPermission(AppPermissions.NAMS.CHAM)
                          || _currentUser.HasPermission(AppPermissions.NAMS.VIEW);
@@ -1169,6 +1304,32 @@ namespace DTNTB.Infrastructure.Services
                     : $"TỪ NGÀY {ngay.Value.Tu:dd/MM/yyyy} ĐẾN NGÀY {ngay.Value.Den:dd/MM/yyyy}";
             var (tu, den) = KhoangThang(q);
             return $"THÁNG {TenThang(tu)}" + (tu == den ? "" : $" - {TenThang(den)}");
+        }
+
+        private string? MaNvCuaToi()
+        {
+            var nv = _currentUser.MaNv?.Trim();
+            return string.IsNullOrEmpty(nv) ? null : nv;
+        }
+
+        /// <summary>Phiếu là của tôi: giao đúng tài khoản, hoặc giao cho tài khoản khác cùng mã nhân viên.</summary>
+        private bool LaCuaToi(string? maNd, string? maNv)
+        {
+            if (string.Equals(maNd?.Trim(), Username(), StringComparison.OrdinalIgnoreCase)) return true;
+            var nv = MaNvCuaToi();
+            return nv != null && string.Equals(maNv?.Trim(), nv, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Điều kiện "phiếu của tôi" (tham số :me, :me_nv lấy từ OwnParams).</summary>
+        private static string OwnSql(string a) =>
+            $"(UPPER(TRIM({a}.ma_nd_nhan)) = UPPER(:me) OR (:me_nv IS NOT NULL AND TRIM({a}.ma_nv_nhan) = :me_nv))";
+
+        private DynamicParameters OwnParams(object? extra = null)
+        {
+            var p = extra == null ? new DynamicParameters() : new DynamicParameters(extra);
+            p.Add("me", Username());
+            p.Add("me_nv", MaNvCuaToi(), DbType.String);
+            return p;
         }
 
         private string Username()

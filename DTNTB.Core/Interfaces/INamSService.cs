@@ -36,6 +36,7 @@ namespace DTNTB.Core.Interfaces
 
         // Báo cáo
         Task<List<NamSTongHopDto>> GetTongHopAsync(NamSPhieuQueryDto query);
+        Task<List<NamSTongHopNvDto>> GetTongHopNhanVienAsync(NamSPhieuQueryDto query);
         Task<byte[]> ExportAsync(NamSPhieuQueryDto query);
     }
 

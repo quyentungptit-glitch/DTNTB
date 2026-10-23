@@ -239,6 +239,13 @@ namespace DTNTB.API.Controllers
             return await Run(() => _service.GetTongHopAsync(query));
         }
 
+        [HttpGet("tong-hop-nv")]
+        public async Task<IActionResult> GetTongHopNhanVien([FromQuery] NamSPhieuQueryDto query)
+        {
+            if (!Co(AppPermissions.NAMS.VIEW, AppPermissions.NAMS.EXPORT)) return Forbid();
+            return await Run(() => _service.GetTongHopNhanVienAsync(query));
+        }
+
         [HttpGet("export")]
         [Authorize(Policy = AppPermissions.NAMS.EXPORT)]
         public async Task<IActionResult> Export([FromQuery] NamSPhieuQueryDto query)

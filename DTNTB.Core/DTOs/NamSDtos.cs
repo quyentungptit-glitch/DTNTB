@@ -247,6 +247,28 @@
         public int SoKem { get; set; }
     }
 
+    /// <summary>Tổng hợp theo nhân viên thực hiện.</summary>
+    public class NamSTongHopNvDto
+    {
+        public string? MaNv { get; set; }
+        public string? MaNd { get; set; }
+        public string? TenNv { get; set; }
+        public string? TenDv { get; set; }
+        public string? TenToQl { get; set; }
+        public int SoPhieuGiao { get; set; }
+        public int SoTuTao { get; set; }
+        public int SoDangLam { get; set; }
+        public int SoDaNop { get; set; }
+        public int SoDaCham { get; set; }
+        public decimal? DiemTb { get; set; }
+        public int SoTot { get; set; }
+        public int SoKha { get; set; }
+        public int SoTb { get; set; }
+        public int SoKem { get; set; }
+        public int SoAnh { get; set; }
+        public int SoAnhCanhBao { get; set; }
+    }
+
     public class NamSXepLoaiDto
     {
         public string Ma { get; set; } = string.Empty;
