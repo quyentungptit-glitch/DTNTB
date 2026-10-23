@@ -52,6 +52,8 @@
             public const string EXPORT          = "PERMISSIONS.GHTT.EXPORT";       // Tải/Xuất file Excel báo cáo GHTT (btndowload)
             public const string TONG_HOP        = "PERMISSIONS.GHTT.TONG_HOP";     // Tổng hợp / Đồng bộ số liệu GHTT (btntonghop)
             public const string CHOT_SO_LIEU    = "PERMISSIONS.GHTT.CHOT_SO_LIEU"; // Chốt số liệu GHTT (btnchotsl - thay thế kiểm tra level_role == 1)
+            public const string PHIEU_GIAO      = "PERMISSIONS.GHTT.PHIEU_GIAO";   // Giao phiếu tiếp cận TB GHTT (Biểu 8) trong phạm vi
+            public const string PHIEU_XU_LY     = "PERMISSIONS.GHTT.PHIEU_XU_LY";  // Cập nhật kết quả phiếu GHTT (kể cả nhập hộ) trong phạm vi
         }
 
         // ==========================================
@@ -74,6 +76,18 @@
             public const string EXPORT  = "PERMISSIONS.DIEMDANH.EXPORT";  // Xuất Excel lịch sử điểm danh
             public const string DELETE  = "PERMISSIONS.DIEMDANH.DELETE";  // Xóa lượt điểm danh (kèm ảnh) trong phạm vi
             public const string APPROVE = "PERMISSIONS.DIEMDANH.APPROVE"; // Duyệt / từ chối lượt điểm danh trong phạm vi
+        }
+
+        // ==========================================
+        // MODULE: 5S NHÀ TRẠM (NAMS = "năm S")
+        // ==========================================
+        public static class NAMS
+        {
+            public const string GIAO      = "PERMISSIONS.NAMS.GIAO";       // Giao trạm cho nhân viên, thu hồi phiếu
+            public const string THUC_HIEN = "PERMISSIONS.NAMS.THUC_HIEN";  // Nhân viên tải ảnh theo tiêu chí và nộp
+            public const string CHAM      = "PERMISSIONS.NAMS.CHAM";       // Chấm điểm phiếu đã nộp
+            public const string VIEW      = "PERMISSIONS.NAMS.VIEW";       // Xem báo cáo tổng hợp / chi tiết
+            public const string EXPORT    = "PERMISSIONS.NAMS.EXPORT";     // Xuất Excel báo cáo
         }
     }
 

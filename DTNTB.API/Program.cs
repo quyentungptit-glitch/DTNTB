@@ -99,6 +99,8 @@ builder.Services.AddHttpClient<IAuthService, AuthService>(client =>
 });
 builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IGhttService, GhttService>();
+builder.Services.AddScoped<IGhttPhieuService, GhttPhieuService>(); // Giao phiếu tiếp cận TB GHTT (dùng chung bảng với BCBG)
+builder.Services.AddScoped<INamSService, NamSService>();         // 5S nhà trạm
 builder.Services.AddScoped<IHeThongService, HeThongService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddSingleton<INotificationAdminService, NotificationAdminService>();
