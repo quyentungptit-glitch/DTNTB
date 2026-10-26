@@ -18,6 +18,10 @@ namespace DTNTB.Core.Interfaces
         Task<List<NamSOptionDto>> GetNvDonViAsync();
         Task<List<NamSOptionDto>> GetNvToAsync(string? maDv);
         Task<NamSKetQuaGiaoDto> GiaoAsync(NamSGiaoRequestDto request);
+        /// <summary>File Excel mẫu giao trạm (kèm danh sách trạm và nhân viên trong phạm vi để tra mã).</summary>
+        Task<byte[]> TaoFileMauGiaoAsync();
+        /// <summary>Đọc file Excel giao trạm: xacNhan = false chỉ kiểm tra từng dòng; true thì giao các dòng hợp lệ.</summary>
+        Task<NamSImportKetQuaDto> ImportGiaoAsync(IFormFile file, bool xacNhan, CancellationToken ct = default);
         Task<bool> ThuHoiAsync(long phieuId, CancellationToken ct = default);
         Task<List<NamSPhieuDto>> GetPhieuDangGiaoAsync(NamSTramQueryDto query);
 
@@ -35,11 +39,16 @@ namespace DTNTB.Core.Interfaces
         Task<List<NamSAnhDto>> UploadAnhAsync(long phieuId, int tieuChiId, IReadOnlyList<IFormFile> files, string? metaJson, CancellationToken ct = default);
         Task<bool> XoaAnhAsync(long anhId, CancellationToken ct = default);
         Task<bool> NopAsync(long phieuId, NamSNopRequestDto request);
-        Task<(Stream Stream, string ContentType)?> GetAnhAsync(long anhId, CancellationToken ct = default);
+        /// <summary>Ảnh gốc, hoặc ảnh thu nhỏ (~400 px) khi thuNho = true (ảnh cũ chưa có bản nhỏ thì tạo và lưu lại).</summary>
+        Task<(Stream Stream, string ContentType)?> GetAnhAsync(long anhId, bool thuNho = false, CancellationToken ct = default);
 
         // Chấm
         Task<PaginatedResultDto<NamSPhieuDto>> GetPhieuListAsync(NamSPhieuQueryDto query);
         Task<NamSPhieuDto?> ChamAsync(long phieuId, NamSChamRequestDto request);
+        /// <summary>Trả phiếu đã nộp / đã chấm về cho nhân viên chụp bổ sung (xoá điểm, giữ ảnh).</summary>
+        Task<NamSPhieuDto?> TraPhieuAsync(long phieuId, NamSTraPhieuRequestDto request);
+        /// <summary>Trạm trong phạm vi kèm kết quả 5S trong kỳ (bản đồ + dashboard).</summary>
+        Task<List<NamSBanDoTramDto>> GetBanDoAsync(NamSPhieuQueryDto query);
 
         // Báo cáo
         Task<List<NamSTongHopDto>> GetTongHopAsync(NamSPhieuQueryDto query);

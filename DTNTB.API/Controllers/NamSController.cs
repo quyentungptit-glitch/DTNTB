@@ -97,6 +97,38 @@ namespace DTNTB.API.Controllers
         public async Task<IActionResult> Giao([FromBody] NamSGiaoRequestDto request)
             => await Run(() => _service.GiaoAsync(request ?? new NamSGiaoRequestDto()));
 
+        /// <summary>File Excel mẫu để giao trạm hàng loạt.</summary>
+        [HttpGet("giao/file-mau")]
+        [Authorize(Policy = AppPermissions.NAMS.GIAO)]
+        public async Task<IActionResult> FileMauGiao()
+        {
+            try
+            {
+                var bytes = await _service.TaoFileMauGiaoAsync();
+                return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Mau_GiaoTram5S.xlsx");
+            }
+            catch (Exception ex)
+            {
+                return Fail(ex, "Chưa tạo được file mẫu.");
+            }
+        }
+
+        /// <summary>Giao trạm bằng file Excel (multipart: file). xacNhan=false: kiểm tra trước; true: giao các dòng hợp lệ.</summary>
+        [HttpPost("giao/import")]
+        [Authorize(Policy = AppPermissions.NAMS.GIAO)]
+        public async Task<IActionResult> ImportGiao(IFormFile? file, [FromQuery] bool xacNhan, CancellationToken ct)
+        {
+            if (file == null || file.Length == 0) return BadRequest(new { message = "Chưa chọn file." });
+            try
+            {
+                return Ok(await _service.ImportGiaoAsync(file, xacNhan, ct));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return Fail(ex, "Chưa đọc được file.");
+            }
+        }
+
         [HttpGet("dang-giao")]
         [Authorize(Policy = AppPermissions.NAMS.GIAO)]
         public async Task<IActionResult> GetDangGiao([FromQuery] NamSTramQueryDto query) => await Run(() => _service.GetPhieuDangGiaoAsync(query));
@@ -219,12 +251,12 @@ namespace DTNTB.API.Controllers
         /// <summary>Ảnh 5S: người được giao xem ảnh của mình; người khác cần quyền GIAO/CHAM/VIEW và phiếu trong phạm vi.</summary>
         [HttpGet("anh/{anhId:long}")]
         [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-        public async Task<IActionResult> GetAnh(long anhId, CancellationToken ct)
+        public async Task<IActionResult> GetAnh(long anhId, [FromQuery] bool nho, CancellationToken ct)
         {
             if (!CoQuyen5S) return Forbid();
             try
             {
-                var file = await _service.GetAnhAsync(anhId, ct);
+                var file = await _service.GetAnhAsync(anhId, nho, ct);
                 if (file == null) return NotFound();
                 Response.Headers.Append("X-Content-Type-Options", "nosniff");
                 return File(file.Value.Stream, file.Value.ContentType);
@@ -278,6 +310,30 @@ namespace DTNTB.API.Controllers
             {
                 return Fail(ex, "Chưa lưu được điểm.");
             }
+        }
+
+        /// <summary>Trả phiếu về nhân viên chụp bổ sung (cần lý do).</summary>
+        [HttpPost("phieu/{id:long}/tra")]
+        [Authorize(Policy = AppPermissions.NAMS.CHAM)]
+        public async Task<IActionResult> TraPhieu(long id, [FromBody] NamSTraPhieuRequestDto request)
+        {
+            try
+            {
+                var item = await _service.TraPhieuAsync(id, request ?? new NamSTraPhieuRequestDto());
+                return item != null ? Ok(item) : NotFound(new { message = "Không tìm thấy phiếu trong phạm vi của bạn." });
+            }
+            catch (Exception ex)
+            {
+                return Fail(ex, "Chưa trả được phiếu.");
+            }
+        }
+
+        /// <summary>Bản đồ / dashboard 5S: trạm trong phạm vi và kết quả trong kỳ.</summary>
+        [HttpGet("ban-do")]
+        public async Task<IActionResult> GetBanDo([FromQuery] NamSPhieuQueryDto query)
+        {
+            if (!Co(AppPermissions.NAMS.VIEW, AppPermissions.NAMS.CHAM, AppPermissions.NAMS.EXPORT)) return Forbid();
+            return await Run(() => _service.GetBanDoAsync(query));
         }
 
         [HttpGet("tong-hop")]

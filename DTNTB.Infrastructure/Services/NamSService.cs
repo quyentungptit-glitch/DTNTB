@@ -32,7 +32,7 @@ namespace DTNTB.Infrastructure.Services
         private const int MaxGiaoMotLan = 500;
         private const int MaxExportRows = 50000;
         private static readonly System.Text.RegularExpressions.Regex ImageKeyPattern =
-            new(@"^(5s/)?\d{4}-\d{2}/\d+_\d+\.jpg$", System.Text.RegularExpressions.RegexOptions.Compiled);
+            new(@"^(5s/)?\d{4}-\d{2}/\d+_\d+(_t)?\.jpg$", System.Text.RegularExpressions.RegexOptions.Compiled);
         private static readonly StringComparer Vi = StringComparer.Create(new CultureInfo("vi-VN"), true);
 
         private readonly string _connString;
@@ -288,6 +288,227 @@ namespace DTNTB.Infrastructure.Services
             return kq;
         }
 
+        // ============================================================
+        // GIAO BẰNG FILE EXCEL
+        // ============================================================
+        private const int MaxDongImport = 2000;
+
+        /// <summary>File mẫu chỉ có cấu trúc và hướng dẫn, không kèm danh sách trạm / nhân viên (dữ liệu nhạy cảm).</summary>
+        public Task<byte[]> TaoFileMauGiaoAsync()
+        {
+            using var wb = new XLWorkbook();
+            var ws = wb.Worksheets.Add("GiaoTram");
+            Header(ws, 1, "MA_CSHT", "MA_NV", "GHI_CHU");
+            ws.Column(1).Width = 22;
+            ws.Column(2).Width = 18;
+            ws.Column(3).Width = 50;
+            ws.Range(2, 1, 2001, 2).Style.NumberFormat.Format = "@";   // giữ nguyên mã dạng chữ
+            ws.Cell(1, 5).Value = "← Mỗi dòng 1 trạm. MA_CSHT và MA_NV bắt buộc (MA_NV có thể ghi tài khoản đăng nhập). Xem sheet HuongDan.";
+            ws.Cell(1, 5).Style.Font.Italic = true;
+            ws.Cell(1, 5).Style.Font.FontColor = XLColor.Gray;
+            ws.SheetView.FreezeRows(1);
+
+            var hd = wb.Worksheets.Add("HuongDan");
+            var dongHd = new[]
+            {
+                "HƯỚNG DẪN GIAO TRẠM 5S BẰNG FILE",
+                "1. Nhập ở sheet GiaoTram, giữ nguyên dòng tiêu đề, mỗi dòng 1 trạm.",
+                "2. MA_CSHT: mã cơ sở hạ tầng (mã trạm hiển thị ở màn Giao trạm 5S).",
+                "3. MA_NV: mã nhân viên (ví dụ VNPT000000) hoặc tài khoản đăng nhập của nhân viên nhận.",
+                "4. GHI_CHU: không bắt buộc, nhân viên sẽ thấy khi mở phiếu.",
+                "5. Một trạm chỉ ghi 1 lần; trạm đang có phiếu chưa nộp sẽ bị bỏ qua.",
+                $"6. Mỗi file tối đa {MaxDongImport} dòng. Tải file lên ở màn Giao trạm 5S → Giao bằng file, kiểm tra kết quả rồi bấm Giao.",
+                "",
+                "Ví dụ:",
+                "MA_CSHT\tMA_NV\tGHI_CHU",
+                "CSHT_XXX_00001\tVNPT000000\tƯu tiên làm trong tuần"
+            };
+            for (var i = 0; i < dongHd.Length; i++)
+            {
+                var parts = dongHd[i].Split('\t');
+                for (var j = 0; j < parts.Length; j++) hd.Cell(i + 1, j + 1).Value = parts[j];
+            }
+            hd.Cell(1, 1).Style.Font.SetBold().Font.SetFontSize(13);
+            hd.Range(10, 1, 10, 3).Style.Font.Bold = true;
+            hd.Column(1).Width = 22; hd.Column(2).Width = 18; hd.Column(3).Width = 40;
+
+            ws.SetTabActive();
+            using var ms = new MemoryStream();
+            wb.SaveAs(ms);
+            return Task.FromResult(ms.ToArray());
+        }
+
+        public async Task<NamSImportKetQuaDto> ImportGiaoAsync(IFormFile file, bool xacNhan, CancellationToken ct = default)
+        {
+            if (file.Length > 5 * 1024 * 1024) throw new NamSValidationException("File quá lớn (tối đa 5 MB).");
+            if (!file.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+                throw new NamSValidationException("Chỉ nhận file Excel .xlsx (dùng file mẫu).");
+
+            var dong = DocFileGiao(file);
+            if (dong.Count == 0) throw new NamSValidationException("File không có dòng dữ liệu nào (sheet GiaoTram, từ dòng 2).");
+            if (dong.Count > MaxDongImport) throw new NamSValidationException($"File có {dong.Count} dòng, tối đa {MaxDongImport} dòng mỗi lần.");
+
+            // Nhân viên trong phạm vi: khớp theo mã NV hoặc tài khoản
+            var dsNv = await GetNhanVienAsync(null, null);
+            var theoMa = new Dictionary<string, NamSNhanVienDto>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in dsNv)
+            {
+                if (!string.IsNullOrWhiteSpace(n.MaNv)) theoMa.TryAdd(n.MaNv.Trim(), n);
+                theoMa.TryAdd(n.MaNd.Trim(), n);
+            }
+
+            await using var conn = new OracleConnection(_connString);
+            await conn.OpenAsync(ct);
+            var maTram = dong.Where(d => !string.IsNullOrEmpty(d.MaCsht)).Select(d => d.MaCsht!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var tram = new Dictionary<string, TramImportRow>(StringComparer.OrdinalIgnoreCase);
+            var mo = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var lo in maTram.Chunk(900))
+            {
+                var p = new DynamicParameters();
+                p.Add("ds", lo.Select(x => x.ToUpperInvariant()).ToList());
+                var scope = TramScope(p, "c");
+                foreach (var t in await conn.QueryAsync<TramImportRow>($@"
+                    SELECT TRIM(c.ma_csht) AS MaCsht, MAX(c.ten_csht) AS TenCsht, MAX(c.ten_toql) AS TenToQl,
+                           MAX(TRIM(TO_CHAR(c.toado_lat))) AS Lat, MAX(TRIM(TO_CHAR(c.toado_long))) AS Lng
+                    FROM dtntb_csht c WHERE UPPER(TRIM(c.ma_csht)) IN :ds AND {scope}
+                    GROUP BY TRIM(c.ma_csht)", p))
+                    tram.TryAdd(t.MaCsht, t);
+                foreach (var m in await conn.QueryAsync<(string Ma, string? Ten)>(@"
+                    SELECT ma_csht, NVL(ten_nv_nhan, ma_nd_nhan) FROM dtntb_5s_phieu
+                    WHERE trang_thai = 'DA_GIAO' AND UPPER(ma_csht) IN :ds", new { ds = lo.Select(x => x.ToUpperInvariant()).ToList() }))
+                    mo.TryAdd(m.Ma, m.Ten ?? "");
+            }
+
+            // Kiểm tra từng dòng
+            var daGap = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var nvCuaDong = new Dictionary<int, NamSNhanVienDto>();
+            foreach (var d in dong)
+            {
+                string? loi = null;
+                if (string.IsNullOrEmpty(d.MaCsht)) loi = "Thiếu MA_CSHT";
+                else if (string.IsNullOrEmpty(d.MaNv)) loi = "Thiếu MA_NV";
+                else if (!daGap.Add(d.MaCsht)) loi = "Trạm bị lặp trong file";
+                else if (!tram.TryGetValue(d.MaCsht, out var t)) loi = "Không tìm thấy trạm hoặc trạm ngoài phạm vi";
+                else
+                {
+                    d.MaCsht = t.MaCsht;
+                    d.TenCsht = t.TenCsht;
+                    d.TenToQl = t.TenToQl;
+                    if (mo.TryGetValue(t.MaCsht, out var ai)) loi = $"Trạm đang có phiếu chưa nộp ({ai})";
+                }
+                if (!string.IsNullOrEmpty(d.MaNv))
+                {
+                    if (theoMa.TryGetValue(d.MaNv, out var nv))
+                    {
+                        d.MaNd = nv.MaNd;
+                        d.TenNv = nv.TenNv;
+                        nvCuaDong[d.Dong] = nv;
+                    }
+                    else loi ??= "Không tìm thấy nhân viên (hoặc ngoài phạm vi / đã nghỉ)";
+                }
+                d.HopLe = loi == null;
+                d.LyDo = loi;
+            }
+
+            var kq = new NamSImportKetQuaDto { XacNhan = xacNhan, TongDong = dong.Count, Dong = dong };
+            if (xacNhan && dong.Any(d => d.HopLe))
+            {
+                var nguoiGiao = Username();
+                var thang = ThangHienTai();
+                await using var tx = await conn.BeginTransactionAsync(ct);
+                try
+                {
+                    await conn.ExecuteAsync("LOCK TABLE dtntb_5s_phieu IN EXCLUSIVE MODE", transaction: tx);
+                    foreach (var d in dong.Where(x => x.HopLe))
+                    {
+                        // Kiểm tra lại trong khoá (có thể vừa có người khác giao)
+                        var dangMo = await conn.ExecuteScalarAsync<int>(
+                            "SELECT COUNT(1) FROM dtntb_5s_phieu WHERE ma_csht = :ma AND trang_thai = 'DA_GIAO'", new { ma = d.MaCsht }, tx);
+                        if (dangMo > 0) { d.HopLe = false; d.LyDo = "Trạm vừa được giao cho người khác"; continue; }
+                        var t = tram[d.MaCsht!];
+                        var nv = nvCuaDong[d.Dong];
+                        await InsertPhieuAsync(conn, tx, d.MaCsht!, thang, new ToaDoRow { Lat = t.Lat, Lng = t.Lng },
+                            nv.MaNd, nv.MaNv, nv.TenNv, nguoiGiao, d.GhiChu);
+                        d.DaGiao = true;
+                    }
+                    await tx.CommitAsync(CancellationToken.None);
+                }
+                catch
+                {
+                    await tx.RollbackAsync(CancellationToken.None);
+                    throw;
+                }
+                _logger.LogInformation("{User} giao {N} trạm 5S bằng file {File}.", nguoiGiao, dong.Count(x => x.DaGiao), file.FileName);
+            }
+            kq.SoHopLe = dong.Count(d => d.HopLe);
+            kq.SoLoi = dong.Count - kq.SoHopLe;
+            kq.SoDaGiao = dong.Count(d => d.DaGiao);
+            return kq;
+        }
+
+        /// <summary>Đọc sheet "GiaoTram" (hoặc sheet đầu): dòng 1 tiêu đề, tìm cột theo tên; không thấy thì A/B/C.</summary>
+        private static List<NamSImportDongDto> DocFileGiao(IFormFile file)
+        {
+            using var stream = file.OpenReadStream();
+            XLWorkbook wb;
+            try { wb = new XLWorkbook(stream); }
+            catch (Exception) { throw new NamSValidationException("Không đọc được file Excel. Hãy dùng file mẫu (.xlsx)."); }
+            using (wb)
+            {
+                var ws = wb.Worksheets.FirstOrDefault(w => w.Name.Equals("GiaoTram", StringComparison.OrdinalIgnoreCase)) ?? wb.Worksheet(1);
+                int cTram = 1, cNv = 2, cGc = 3;
+                var lastCol = Math.Min(ws.LastColumnUsed()?.ColumnNumber() ?? 3, 30);
+                for (var c = 1; c <= lastCol; c++)
+                {
+                    var h = BoDau(ws.Cell(1, c).GetFormattedString());
+                    if (h.Contains("CSHT") || h == "MATRAM") cTram = c;
+                    else if (h.StartsWith("MANV") || h.Contains("NHANVIEN") || h.Contains("TAIKHOAN")) cNv = c;
+                    else if (h.StartsWith("GHICHU")) cGc = c;
+                }
+                var last = ws.LastRowUsed()?.RowNumber() ?? 1;
+                var ds = new List<NamSImportDongDto>();
+                for (var r = 2; r <= last; r++)
+                {
+                    var ma = ws.Cell(r, cTram).GetFormattedString().Trim();
+                    var nv = ws.Cell(r, cNv).GetFormattedString().Trim();
+                    var gc = ws.Cell(r, cGc).GetFormattedString().Trim();
+                    if (ma.Length == 0 && nv.Length == 0 && gc.Length == 0) continue;
+                    if (ds.Count > MaxDongImport) break;
+                    ds.Add(new NamSImportDongDto
+                    {
+                        Dong = r,
+                        MaCsht = ma.Length == 0 ? null : Truncate(ma, 50),
+                        MaNv = nv.Length == 0 ? null : Truncate(nv, 100),
+                        GhiChu = CleanText(gc, 500)
+                    });
+                }
+                return ds;
+            }
+        }
+
+        /// <summary>Viết hoa, bỏ dấu, bỏ ký tự không phải chữ/số: "Mã CSHT" -> "MACSHT".</summary>
+        private static string BoDau(string s)
+        {
+            var n = s.Normalize(System.Text.NormalizationForm.FormD);
+            var sb = new System.Text.StringBuilder();
+            foreach (var ch in n)
+            {
+                if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch) == System.Globalization.UnicodeCategory.NonSpacingMark) continue;
+                var c = ch == 'đ' || ch == 'Đ' ? 'D' : char.ToUpperInvariant(ch);
+                if (char.IsLetterOrDigit(c)) sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        private sealed class TramImportRow
+        {
+            public string MaCsht { get; set; } = string.Empty;
+            public string? TenCsht { get; set; }
+            public string? TenToQl { get; set; }
+            public string? Lat { get; set; }
+            public string? Lng { get; set; }
+        }
+
         private async Task<long> InsertPhieuAsync(OracleConnection conn, System.Data.Common.DbTransaction tx, string maCsht, int thang, ToaDoRow tram,
                                                   string maNd, string? maNv, string? tenNv, string nguoiGiao, string? ghiChu)
         {
@@ -459,7 +680,7 @@ namespace DTNTB.Infrastructure.Services
             var p = OwnParams(new { id = phieuId });
             return await XoaPhieuCoreAsync(phieuId, $@"
                 SELECT p.phieu_id FROM dtntb_5s_phieu p
-                WHERE p.phieu_id = :id AND {OwnSql("p")} AND p.trang_thai = 'DA_GIAO'
+                WHERE p.phieu_id = :id AND {OwnSql("p")} AND p.trang_thai = 'DA_GIAO' AND p.so_lan_tra = 0
                   AND UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan))
                 FOR UPDATE", p, "tự tạo", ct);
         }
@@ -662,6 +883,7 @@ namespace DTNTB.Infrastructure.Services
                 var anhId = await conn.ExecuteScalarAsync<long>("SELECT seq_dtntb_5s_anh.NEXTVAL FROM dual");
                 var key = $"{thang}/{phieuId}_{anhId}.jpg";   // bucket riêng ttht-5s
                 await _imageStore.SaveAsync(key, jpeg, "image/jpeg", ct);
+                await LuuThuNhoAsync(key, jpeg, ct);
                 try
                 {
                     var ins = new DynamicParameters();
@@ -733,7 +955,7 @@ namespace DTNTB.Infrastructure.Services
             return n == 1;
         }
 
-        public async Task<(Stream Stream, string ContentType)?> GetAnhAsync(long anhId, CancellationToken ct = default)
+        public async Task<(Stream Stream, string ContentType)?> GetAnhAsync(long anhId, bool thuNho = false, CancellationToken ct = default)
         {
             var p = new DynamicParameters();
             p.Add("aid", anhId);
@@ -743,7 +965,61 @@ namespace DTNTB.Infrastructure.Services
                 SELECT a.image_path FROM dtntb_5s_anh a JOIN dtntb_5s_phieu p ON p.phieu_id = a.phieu_id
                 WHERE a.anh_id = :aid AND {access}", p);
             if (string.IsNullOrWhiteSpace(key) || !ImageKeyPattern.IsMatch(key.Trim())) return null;
-            return await _imageStore.GetAsync(key.Trim(), ct);
+            key = key.Trim();
+            if (!thuNho) return await _imageStore.GetAsync(key, ct);
+
+            var nho = await _imageStore.GetAsync(KhoaThuNho(key), ct);
+            if (nho != null) return nho;
+            // Ảnh tải lên trước khi có bản thu nhỏ: tạo từ ảnh gốc rồi lưu lại cho lần sau.
+            var goc = await _imageStore.GetAsync(key, ct);
+            if (goc == null) return null;
+            byte[] bytes;
+            await using (var s = goc.Value.Stream)
+            using (var ms = new MemoryStream())
+            {
+                await s.CopyToAsync(ms, ct);
+                bytes = ms.ToArray();
+            }
+            var thumb = TaoThuNho(bytes);
+            if (thumb == null) return (new MemoryStream(bytes), "image/jpeg");
+            try { await _imageStore.SaveAsync(KhoaThuNho(key), thumb, "image/jpeg", ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _logger.LogWarning(ex, "Không lưu được ảnh thu nhỏ 5S {Key}.", key); }
+            return (new MemoryStream(thumb), "image/jpeg");
+        }
+
+        /// <summary>"2026-10/12_34.jpg" -> "2026-10/12_34_t.jpg"</summary>
+        private static string KhoaThuNho(string key) => key.EndsWith("_t.jpg", StringComparison.Ordinal) ? key : key[..^4] + "_t.jpg";
+
+        private const int ThuNhoPx = 400;
+
+        private static byte[]? TaoThuNho(byte[] jpeg)
+        {
+            try
+            {
+                using var image = new MagickImage(jpeg);
+                image.AutoOrient();
+                image.Resize(new MagickGeometry((uint)ThuNhoPx, (uint)ThuNhoPx) { Greater = true });
+                image.Strip();
+                image.Quality = 70;
+                image.Format = MagickFormat.Jpeg;
+                return image.ToByteArray();
+            }
+            catch (MagickException)
+            {
+                return null;
+            }
+        }
+
+        private async Task LuuThuNhoAsync(string key, byte[] jpeg, CancellationToken ct)
+        {
+            var thumb = TaoThuNho(jpeg);
+            if (thumb == null) return;
+            try { await _imageStore.SaveAsync(KhoaThuNho(key), thumb, "image/jpeg", ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Không có bản nhỏ cũng không sao: lần xem đầu sẽ tự tạo lại.
+                _logger.LogWarning(ex, "Không lưu được ảnh thu nhỏ 5S {Key}.", key);
+            }
         }
 
         // ============================================================
@@ -836,6 +1112,130 @@ namespace DTNTB.Infrastructure.Services
             }
 
             return await conn.QueryFirstOrDefaultAsync<NamSPhieuDto>($"SELECT {PhieuColumns} FROM dtntb_5s_phieu p WHERE p.phieu_id = :id", new { id = phieuId });
+        }
+
+        public async Task<NamSPhieuDto?> TraPhieuAsync(long phieuId, NamSTraPhieuRequestDto request)
+        {
+            var lyDo = CleanText(request?.LyDo, 500);
+            if (lyDo == null || lyDo.Length < 3) throw new NamSValidationException("Nhập lý do trả phiếu để nhân viên biết cần chụp bổ sung gì.");
+
+            await using var conn = new OracleConnection(_connString);
+            await conn.OpenAsync();
+            await using (var tx = await conn.BeginTransactionAsync())
+            {
+                try
+                {
+                    // Khoá bảng phiếu để không lẫn với giao / tự tạo phiếu mới của cùng trạm.
+                    await conn.ExecuteAsync("LOCK TABLE dtntb_5s_phieu IN EXCLUSIVE MODE", transaction: tx);
+                    var p = new DynamicParameters();
+                    p.Add("id", phieuId);
+                    var scope = PhieuScope(p, "p");
+                    var row = await conn.QueryFirstOrDefaultAsync<NamSPhieuDto>(
+                        $"SELECT {PhieuColumns} FROM dtntb_5s_phieu p WHERE p.phieu_id = :id AND {scope}", p, tx);
+                    if (row == null) { await tx.RollbackAsync(); return null; }
+                    if (row.TrangThai is not (NamSTrangThai.DA_NOP or NamSTrangThai.DA_CHAM))
+                        throw new NamSValidationException("Chỉ trả được phiếu đã nộp hoặc đã chấm.");
+
+                    var khac = await conn.QueryFirstOrDefaultAsync<string?>(@"
+                        SELECT NVL(ten_nv_nhan, ma_nd_nhan) FROM dtntb_5s_phieu
+                        WHERE ma_csht = :ma AND trang_thai = 'DA_GIAO' AND phieu_id <> :id AND ROWNUM = 1",
+                        new { ma = row.MaCsht, id = phieuId }, tx);
+                    if (khac != null)
+                        throw new NamSValidationException($"Trạm đang có phiếu khác chưa nộp (của {khac}), chưa trả phiếu này được.");
+
+                    await conn.ExecuteAsync("DELETE FROM dtntb_5s_diem WHERE phieu_id = :id", new { id = phieuId }, tx);
+                    await conn.ExecuteAsync(@"
+                        UPDATE dtntb_5s_phieu
+                        SET trang_thai = 'DA_GIAO', so_lan_tra = so_lan_tra + 1, ly_do_tra = :lydo, ngay_tra = SYSDATE,
+                            nguoi_tra = :nguoi, ten_nguoi_tra = :ten,
+                            ngay_nop = NULL, tong_diem = NULL, diem_toi_da = NULL, xep_loai = NULL, nhan_xet = NULL,
+                            nguoi_cham = NULL, ten_nguoi_cham = NULL, ngay_cham = NULL
+                        WHERE phieu_id = :id",
+                        new { id = phieuId, lydo = lyDo, nguoi = Username(), ten = Truncate(_currentUser.TenNv?.Trim(), 200) }, tx);
+                    await tx.CommitAsync();
+                }
+                catch
+                {
+                    await tx.RollbackAsync();
+                    throw;
+                }
+            }
+            _logger.LogInformation("{User} trả phiếu 5S {Id} về nhân viên.", Username(), phieuId);
+            return await conn.QueryFirstOrDefaultAsync<NamSPhieuDto>($"SELECT {PhieuColumns} FROM dtntb_5s_phieu p WHERE p.phieu_id = :id", new { id = phieuId });
+        }
+
+        public async Task<List<NamSBanDoTramDto>> GetBanDoAsync(NamSPhieuQueryDto query)
+        {
+            var p = new DynamicParameters();
+            var tramWhere = new List<string> { TramScope(p, "c") };
+            AddMaDvFilter(tramWhere, p, "c.ma_dv", query.MaDv);
+            if (!string.IsNullOrWhiteSpace(query.MaToQl))
+            {
+                ValidateCode(query.MaToQl, "Mã tổ");
+                tramWhere.Add("TRIM(c.ma_toql) = :f_to");
+                p.Add("f_to", query.MaToQl.Trim());
+            }
+            var thoiGian = ThoiGianClause(p, query);
+
+            await using var conn = new OracleConnection(_connString);
+            var rows = await conn.QueryAsync<BanDoRow>($@"
+                WITH ph AS (
+                    SELECT p.ma_csht, p.phieu_id, p.trang_thai, p.xep_loai, p.ngay_cham, p.ten_nv_nhan,
+                           CASE WHEN p.diem_toi_da > 0 THEN ROUND(p.tong_diem * 100 / p.diem_toi_da, 1) END AS pct,
+                           ROW_NUMBER() OVER (PARTITION BY p.ma_csht
+                               ORDER BY CASE WHEN p.trang_thai = 'DA_CHAM' THEN 0 ELSE 1 END, p.ngay_cham DESC NULLS LAST, p.ngay_giao DESC, p.phieu_id DESC) AS rn,
+                           COUNT(1) OVER (PARTITION BY p.ma_csht) AS so_phieu,
+                           SUM(CASE WHEN p.trang_thai = 'DA_NOP' THEN 1 ELSE 0 END) OVER (PARTITION BY p.ma_csht) AS so_nop,
+                           SUM(CASE WHEN p.trang_thai = 'DA_GIAO' THEN 1 ELSE 0 END) OVER (PARTITION BY p.ma_csht) AS so_giao
+                    FROM dtntb_5s_phieu p
+                    WHERE p.trang_thai <> 'THU_HOI' AND {thoiGian}
+                )
+                SELECT * FROM (
+                    SELECT TRIM(c.ma_csht) AS MaCsht, c.ten_csht AS TenCsht,
+                           LTRIM(TRIM(c.diachi) || CASE WHEN c.phuongxa IS NOT NULL THEN ', ' || TRIM(c.phuongxa) END, ', ') AS DiaChi,
+                           SUBSTR(TRIM(c.ma_dv), 1, 7) AS MaDv, c.ten_dv AS TenDv, TRIM(c.ma_toql) AS MaToQl, c.ten_toql AS TenToQl,
+                           TRIM(TO_CHAR(c.toado_lat)) AS Lat, TRIM(TO_CHAR(c.toado_long)) AS Lng,
+                           h.phieu_id AS PhieuId, h.trang_thai AS TrangThai, h.xep_loai AS XepLoai, h.pct AS Diem,
+                           h.ngay_cham AS NgayCham, h.ten_nv_nhan AS TenNv,
+                           NVL(h.so_phieu, 0) AS SoPhieu, NVL(h.so_nop, 0) AS SoNop, NVL(h.so_giao, 0) AS SoGiao
+                    FROM dtntb_csht c
+                    LEFT JOIN ph h ON h.ma_csht = TRIM(c.ma_csht) AND h.rn = 1
+                    WHERE {string.Join(" AND ", tramWhere)}
+                ) WHERE ROWNUM <= 20000", p, commandTimeout: 120);
+
+            return rows.GroupBy(r => r.MaCsht).Select(g => g.First()).Select(r => new NamSBanDoTramDto
+            {
+                MaCsht = r.MaCsht, TenCsht = r.TenCsht, DiaChi = r.DiaChi, MaDv = r.MaDv, TenDv = r.TenDv,
+                MaToQl = r.MaToQl, TenToQl = r.TenToQl, Lat = ParseCoord(r.Lat, 90), Lng = ParseCoord(r.Lng, 180),
+                PhieuId = r.PhieuId, Diem = r.TrangThai == NamSTrangThai.DA_CHAM ? r.Diem : null, NgayCham = r.NgayCham, TenNv = r.TenNv,
+                SoPhieu = r.SoPhieu,
+                KetQua = r.TrangThai == NamSTrangThai.DA_CHAM && !string.IsNullOrEmpty(r.XepLoai) ? r.XepLoai!
+                       : r.SoNop > 0 ? "CHO_CHAM"
+                       : r.SoGiao > 0 ? "DANG_LAM"
+                       : "CHUA"
+            }).ToList();
+        }
+
+        private sealed class BanDoRow
+        {
+            public string MaCsht { get; set; } = string.Empty;
+            public string? TenCsht { get; set; }
+            public string? DiaChi { get; set; }
+            public string? MaDv { get; set; }
+            public string? TenDv { get; set; }
+            public string? MaToQl { get; set; }
+            public string? TenToQl { get; set; }
+            public string? Lat { get; set; }
+            public string? Lng { get; set; }
+            public long? PhieuId { get; set; }
+            public string? TrangThai { get; set; }
+            public string? XepLoai { get; set; }
+            public decimal? Diem { get; set; }
+            public DateTime? NgayCham { get; set; }
+            public string? TenNv { get; set; }
+            public int SoPhieu { get; set; }
+            public int SoNop { get; set; }
+            public int SoGiao { get; set; }
         }
 
         // ============================================================
@@ -1274,8 +1674,11 @@ namespace DTNTB.Infrastructure.Services
             {
                 var k = key?.Trim();
                 if (string.IsNullOrEmpty(k) || !ImageKeyPattern.IsMatch(k)) continue;
-                try { await _imageStore.DeleteAsync(k, CancellationToken.None); }
-                catch (Exception ex) { _logger.LogWarning(ex, "Không xóa được ảnh 5S {Key} trên MinIO.", k); }
+                foreach (var kk in new[] { k, KhoaThuNho(k) }.Distinct())
+                {
+                    try { await _imageStore.DeleteAsync(kk, CancellationToken.None); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Không xóa được ảnh 5S {Key} trên MinIO.", kk); }
+                }
             }
         }
 
@@ -1294,7 +1697,8 @@ namespace DTNTB.Infrastructure.Services
             p.ngay_cham AS NgayCham,
             (SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id) AS SoAnh,
             (SELECT COUNT(1) FROM dtntb_5s_anh a WHERE a.phieu_id = p.phieu_id AND a.canh_bao IS NOT NULL) AS SoAnhCanhBao,
-            CASE WHEN UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan)) THEN 1 ELSE 0 END AS TuTaoSo";
+            CASE WHEN UPPER(TRIM(p.nguoi_giao)) = UPPER(TRIM(p.ma_nd_nhan)) THEN 1 ELSE 0 END AS TuTaoSo,
+            p.so_lan_tra AS SoLanTra, p.ly_do_tra AS LyDoTra, p.ngay_tra AS NgayTra, p.ten_nguoi_tra AS TenNguoiTra";
 
         private const string AnhColumns = @"a.anh_id AS AnhId, a.tieuchi_id AS TieuChiId, a.file_name AS FileName, a.ngay_tai AS NgayTai,
             a.chup_luc AS ChupLuc, a.latitude AS Latitude, a.longitude AS Longitude, a.nguon_toado AS NguonToaDo,

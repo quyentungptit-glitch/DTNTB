@@ -107,6 +107,33 @@
         public string? GhiChu { get; set; }
     }
 
+    /// <summary>Một dòng trong file import giao trạm.</summary>
+    public class NamSImportDongDto
+    {
+        public int Dong { get; set; }
+        public string? MaCsht { get; set; }
+        public string? TenCsht { get; set; }
+        public string? TenToQl { get; set; }
+        public string? MaNv { get; set; }
+        public string? MaNd { get; set; }
+        public string? TenNv { get; set; }
+        public string? GhiChu { get; set; }
+        public bool HopLe { get; set; }
+        public string? LyDo { get; set; }
+        /// <summary>Đã tạo phiếu (chỉ khi xác nhận giao).</summary>
+        public bool DaGiao { get; set; }
+    }
+
+    public class NamSImportKetQuaDto
+    {
+        public bool XacNhan { get; set; }
+        public int TongDong { get; set; }
+        public int SoHopLe { get; set; }
+        public int SoLoi { get; set; }
+        public int SoDaGiao { get; set; }
+        public List<NamSImportDongDto> Dong { get; set; } = new();
+    }
+
     public class NamSKetQuaGiaoDto
     {
         public int ThanhCong { get; set; }
@@ -150,6 +177,38 @@
         /// <summary>Nhân viên tự tạo (người giao = người nhận).</summary>
         public bool TuTao => TuTaoSo == 1;
         [System.Text.Json.Serialization.JsonIgnore] public int TuTaoSo { get; set; }
+        /// <summary>Số lần người chấm trả phiếu về cho nhân viên chụp bổ sung.</summary>
+        public int SoLanTra { get; set; }
+        public string? LyDoTra { get; set; }
+        public DateTime? NgayTra { get; set; }
+        public string? TenNguoiTra { get; set; }
+    }
+
+    public class NamSTraPhieuRequestDto
+    {
+        public string? LyDo { get; set; }
+    }
+
+    /// <summary>Trạm trên bản đồ 5S với kết quả trong kỳ.</summary>
+    public class NamSBanDoTramDto
+    {
+        public string MaCsht { get; set; } = string.Empty;
+        public string? TenCsht { get; set; }
+        public string? DiaChi { get; set; }
+        public string? MaDv { get; set; }
+        public string? TenDv { get; set; }
+        public string? MaToQl { get; set; }
+        public string? TenToQl { get; set; }
+        public double? Lat { get; set; }
+        public double? Lng { get; set; }
+        /// <summary>TOT | KHA | TB | KEM (đã chấm, lấy phiếu chấm gần nhất) | CHO_CHAM | DANG_LAM | CHUA.</summary>
+        public string KetQua { get; set; } = "CHUA";
+        /// <summary>Điểm % của phiếu chấm gần nhất trong kỳ.</summary>
+        public decimal? Diem { get; set; }
+        public long? PhieuId { get; set; }
+        public DateTime? NgayCham { get; set; }
+        public string? TenNv { get; set; }
+        public int SoPhieu { get; set; }
     }
 
     public class NamSAnhDto
