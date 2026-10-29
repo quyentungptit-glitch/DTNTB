@@ -18,21 +18,21 @@ phiếu giao bên nào thì bên kia cũng thấy; Biểu 8 (`GHTT_BIEU_8`) vẫ
 
 ## Phạm vi dữ liệu (data_scope của role)
 
-| Scope | Giao phiếu (TB theo đơn vị quản lý / NV thực hiện) | Phiếu GHTT |
+| Scope | Giao phiếu (TB theo đơn vị quản lý / NV kỹ thuật) | Phiếu GHTT |
 |---|---|---|
 | TOAN_TINH | Tất cả, chọn đơn vị | Tất cả phiếu |
 | DIA_BAN | Đơn vị thuộc địa bàn (`v_donvi_diaban`) | Phiếu của các đơn vị đó |
 | DON_VI | Cùng 7 ký tự đầu mã đơn vị | Phiếu của đơn vị |
-| TO_QL | TB có NV thực hiện thuộc tổ (NV trong `v_nguoidung_diaban` cùng toàn bộ `ma_dv`) | Phiếu giao cho NV thuộc tổ |
-| NHAN_VIEN | TB mình là NV thực hiện | Chỉ phiếu giao cho mình (`ma_nv` trong JWT) |
+| TO_QL | TB có NV kỹ thuật thuộc tổ (NV trong `v_nguoidung_diaban` cùng toàn bộ `ma_dv`) | Phiếu giao cho NV thuộc tổ |
+| NHAN_VIEN | TB mình là NV kỹ thuật | Chỉ phiếu giao cho mình (`ma_nv` trong JWT) |
 
 Mã đơn vị `215.7xxx` được quy về `215.3xxx` khi so sánh (như BCBG). Người thao tác ghi vào phiếu bằng `ma_nv`
 (thiếu thì dùng tài khoản đăng nhập); lịch sử ghi `[Nhập hộ NV ...]` khi người cập nhật khác NV nhận phiếu và có hậu tố `[DTNTB]`.
 
 ## Quy tắc (giữ nguyên BCBG)
 
-- Nguồn: tháng chọn, lần import mới nhất của từng phân vùng; `LOAITB_ID = 58`, `NHANVIEN_TH_ID > 0`, `NGAYHEN_BH_TU IS NULL`.
-- Phiếu giao cho đúng NV thực hiện, hạn 72 giờ. TB còn phiếu trong hạn không giao thêm; hết hạn chưa xử lý thì phiếu cũ
+- Nguồn: tháng chọn, lần import mới nhất của từng phân vùng; `LOAITB_ID = 58`, `NHANVIEN_ID_KT > 0`, `NGAYHEN_BH_TU IS NULL`, `GHTT_THANHCONG = 0` (TB đã gia hạn thành công thì không còn trong danh sách).
+- Phiếu giao cho đúng NV kỹ thuật, hạn 72 giờ. TB còn phiếu trong hạn không giao thêm; hết hạn chưa xử lý thì phiếu cũ
   treo và được giao phiếu mới. Khi giao khóa bảng `GHTT_PHIEU` trong giao dịch ngắn để không giao trùng.
 - Phiếu đang mở (kể cả quá hạn) → Thành công / Không thành công (bắt buộc lý do); phiếu Không thành công được đổi sang Thành công.
 

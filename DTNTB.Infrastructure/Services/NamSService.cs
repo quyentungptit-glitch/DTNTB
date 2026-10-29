@@ -1248,17 +1248,24 @@ namespace DTNTB.Infrastructure.Services
             AddMaDvFilter(tramWhere, p, "c.ma_dv", query.MaDv);
             var phieuWhere = new List<string> { PhieuScope(p, "p"), "p.trang_thai <> 'THU_HOI'", ThoiGianClause(p, query) };
             AddMaDvFilter(phieuWhere, p, "p.ma_dv", query.MaDv, "f_dv2");
+            if (!string.IsNullOrWhiteSpace(query.MaToQl))
+            {
+                ValidateCode(query.MaToQl, "Mã tổ");
+                tramWhere.Add("TRIM(c.ma_toql) = :f_to");
+                phieuWhere.Add("p.ma_toql = :f_to");
+                p.Add("f_to", query.MaToQl.Trim());
+            }
 
             await using var conn = new OracleConnection(_connString);
             var rows = await conn.QueryAsync<NamSTongHopDto>($@"
+                -- Nhóm theo tổ quản lý (TTHT); đơn vị = 7 ký tự đầu mã tổ (215.201 = Trung tâm Hạ tầng).
                 WITH tram AS (
-                    SELECT SUBSTR(TRIM(c.ma_dv), 1, 7) AS ma_dv, MAX(c.ten_dv) AS ten_dv, TRIM(c.ma_toql) AS ma_toql,
-                           MAX(c.ten_toql) AS ten_toql, COUNT(DISTINCT TRIM(c.ma_csht)) AS so_tram
+                    SELECT TRIM(c.ma_toql) AS ma_toql, MAX(c.ten_toql) AS ten_toql, COUNT(DISTINCT TRIM(c.ma_csht)) AS so_tram
                     FROM dtntb_csht c WHERE {string.Join(" AND ", tramWhere)}
-                    GROUP BY SUBSTR(TRIM(c.ma_dv), 1, 7), TRIM(c.ma_toql)
+                    GROUP BY TRIM(c.ma_toql)
                 ),
                 ph AS (
-                    SELECT SUBSTR(p.ma_dv, 1, 7) AS ma_dv, MAX(p.ten_dv) AS ten_dv, p.ma_toql, MAX(p.ten_toql) AS ten_toql,
+                    SELECT p.ma_toql, MAX(p.ten_toql) AS ten_toql,
                            COUNT(1) AS so_giao,
                            SUM(CASE WHEN p.trang_thai IN ('DA_NOP', 'DA_CHAM') THEN 1 ELSE 0 END) AS so_nop,
                            SUM(CASE WHEN p.trang_thai = 'DA_CHAM' THEN 1 ELSE 0 END) AS so_cham,
@@ -1269,16 +1276,17 @@ namespace DTNTB.Infrastructure.Services
                            SUM(CASE WHEN p.xep_loai = 'TB' AND p.trang_thai = 'DA_CHAM' THEN 1 ELSE 0 END) AS so_tb,
                            SUM(CASE WHEN p.xep_loai = 'KEM' AND p.trang_thai = 'DA_CHAM' THEN 1 ELSE 0 END) AS so_kem
                     FROM dtntb_5s_phieu p WHERE {string.Join(" AND ", phieuWhere)}
-                    GROUP BY SUBSTR(p.ma_dv, 1, 7), p.ma_toql
+                    GROUP BY p.ma_toql
                 )
                 -- Chỉ các tổ có trạm được giao trong kỳ
-                SELECT h.ma_dv AS MaDv, NVL(t.ten_dv, h.ten_dv) AS TenDv,
-                       h.ma_toql AS MaToQl, NVL(t.ten_toql, h.ten_toql) AS TenToQl,
+                SELECT NVL(SUBSTR(h.ma_toql, 1, 7), '?') AS MaDv,
+                       NVL((SELECT MAX(d.ten_dv) FROM v_donvi d WHERE TRIM(d.ma_dv) = SUBSTR(h.ma_toql, 1, 7)), SUBSTR(h.ma_toql, 1, 7)) AS TenDv,
+                       h.ma_toql AS MaToQl, NVL(t.ten_toql, NVL(h.ten_toql, '(chưa gán tổ)')) AS TenToQl,
                        NVL(t.so_tram, 0) AS SoTram, NVL(h.so_giao, 0) AS SoPhieuGiao, NVL(h.so_nop, 0) AS SoDaNop,
                        NVL(h.so_cham, 0) AS SoDaCham, NVL(h.so_tram_cham, 0) AS SoTramDaCham, h.diem_tb AS DiemTb,
                        NVL(h.so_tot, 0) AS SoTot, NVL(h.so_kha, 0) AS SoKha, NVL(h.so_tb, 0) AS SoTb, NVL(h.so_kem, 0) AS SoKem
                 FROM ph h
-                LEFT JOIN tram t ON t.ma_dv = h.ma_dv AND NVL(t.ma_toql, '#') = NVL(h.ma_toql, '#')", p, commandTimeout: 120);
+                LEFT JOIN tram t ON NVL(t.ma_toql, '#') = NVL(h.ma_toql, '#')", p, commandTimeout: 120);
             return rows.OrderBy(r => r.TenDv ?? r.MaDv, Vi).ThenBy(r => r.TenToQl ?? r.MaToQl, Vi).ToList();
         }
 
@@ -1290,7 +1298,7 @@ namespace DTNTB.Infrastructure.Services
             var scopePhieu = PhieuScope(p, "p");
             var scopeNv = ScopeClause(p, "p.nv_ma_dv", "p.nv_ma_dv", null);
             var where = new List<string> { $"(({scopePhieu}) OR (p.nv_ma_dv IS NOT NULL AND {scopeNv}))", "p.trang_thai <> 'THU_HOI'", ThoiGianClause(p, query) };
-            AddMaDvFilter(where, p, "p.nv_ma_dv", string.IsNullOrWhiteSpace(query.NvMaDv) ? query.MaDv : query.NvMaDv);
+            AddMaDvFilter(where, p, "p.nv_ma_dv", query.NvMaDv);
             if (!string.IsNullOrWhiteSpace(query.NvMaTo))
             {
                 ValidateCode(query.NvMaTo, "Mã tổ");
@@ -1434,7 +1442,7 @@ namespace DTNTB.Infrastructure.Services
             wn.SheetView.FreezeRows(1);
 
             var ct = wb.Worksheets.Add("ChiTiet");
-            Header(ct, 1, "STT", "Tháng", "Lần", "Mã CSHT", "Tên trạm", "Đơn vị", "Tổ quản lý", "Địa chỉ", "NV thực hiện", "Ngày giao",
+            Header(ct, 1, "STT", "Tháng", "Lần", "Mã CSHT", "Tên trạm", "Địa bàn (TTVT)", "Tổ quản lý", "Địa chỉ", "NV thực hiện", "Ngày giao",
                    "Ngày nộp", "Trạng thái", "Điểm", "Điểm tối đa", "Xếp loại", "Người chấm", "Ngày chấm", "Nhận xét", "Số ảnh", "Ảnh cảnh báo");
             r = 2;
             foreach (var x in chiTiet)
@@ -1488,16 +1496,23 @@ namespace DTNTB.Infrastructure.Services
             {
                 case UserDataScopeLevel.ToanTinh:
                     return "1 = 1";
+                // Trạm do TTHT quản lý (ma_toql = 215.201.xxx), còn ma_dv là TTVT địa bàn: cấp địa bàn / đơn vị
+                // thấy trạm khi tổ quản lý HOẶC TTVT địa bàn thuộc phạm vi (lãnh đạo TTHT thấy toàn bộ trạm,
+                // lãnh đạo TTVT thấy trạm trên địa bàn mình).
                 case UserDataScopeLevel.DiaBan:
                     if (string.IsNullOrWhiteSpace(_currentUser.DiaBanId)) return "1 = 0";
                     p.Add("sc_diaban", _currentUser.DiaBanId.Trim());
-                    return $@"SUBSTR(TRIM({maDvCol}), 1, 7) IN (
-                                SELECT SUBSTR(TRIM(db.ma_dv), 1, 7) FROM v_donvi_diaban db
-                                WHERE TRIM(TO_CHAR(db.diaban_id)) = :sc_diaban)";
+                    const string dsDiaBan = @"SELECT SUBSTR(TRIM(db.ma_dv), 1, 7) FROM v_donvi_diaban db
+                                WHERE TRIM(TO_CHAR(db.diaban_id)) = :sc_diaban";
+                    return maToCol == maDvCol
+                        ? $"SUBSTR(TRIM({maDvCol}), 1, 7) IN ({dsDiaBan})"
+                        : $"(SUBSTR(TRIM({maDvCol}), 1, 7) IN ({dsDiaBan}) OR SUBSTR(TRIM({maToCol}), 1, 7) IN ({dsDiaBan}))";
                 case UserDataScopeLevel.DonVi:
                     if (string.IsNullOrWhiteSpace(_currentUser.MaDv7)) return "1 = 0";
                     p.Add("sc_dv", _currentUser.MaDv7.Trim());
-                    return $"SUBSTR(TRIM({maDvCol}), 1, 7) = :sc_dv";
+                    return maToCol == maDvCol
+                        ? $"SUBSTR(TRIM({maDvCol}), 1, 7) = :sc_dv"
+                        : $"(SUBSTR(TRIM({maDvCol}), 1, 7) = :sc_dv OR SUBSTR(TRIM({maToCol}), 1, 7) = :sc_dv)";
                 case UserDataScopeLevel.ToQuanLy:
                     if (string.IsNullOrWhiteSpace(_currentUser.MaDv)) return "1 = 0";
                     p.Add("sc_to", _currentUser.MaDv.Trim());

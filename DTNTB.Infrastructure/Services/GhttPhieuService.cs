@@ -17,9 +17,9 @@ namespace DTNTB.Infrastructure.Services
     /// GHTT_PHIEU_LS, GHTT_DM_LYDO trên schema ConnectionString_NBH nên phiếu giao bên nào bên kia cũng thấy.
     ///
     /// Quy tắc giữ nguyên như BCBG:
-    ///  - Nguồn = tháng được chọn, lần import mới nhất (ngày) của từng phân vùng; LOAITB_ID = 58, NHANVIEN_TH_ID > 0,
-    ///    NGAYHEN_BH_TU IS NULL; đơn vị ghép (DONVI_ID, PHANVUNG_ID) sang V_DONVI với MA_DV LIKE '215.3%'.
-    ///  - Phiếu giao cho đúng NV thực hiện, hạn 72 giờ; TB còn phiếu trong hạn không giao thêm; hết hạn chưa xử lý thì
+    ///  - Nguồn = tháng được chọn, lần import mới nhất (ngày) của từng phân vùng; LOAITB_ID = 58, NHANVIEN_ID_KT > 0,
+    ///    NGAYHEN_BH_TU IS NULL, GHTT_THANHCONG = 0 (giống BCBG); đơn vị ghép (DONVI_ID, PHANVUNG_ID) sang V_DONVI với MA_DV LIKE '215.3%'.
+    ///  - Phiếu giao cho đúng NV kỹ thuật (NHANVIEN_ID_KT), hạn 72 giờ; TB còn phiếu trong hạn không giao thêm; hết hạn chưa xử lý thì
     ///    phiếu cũ treo, được giao phiếu mới. Khóa bảng khi giao để 2 người bấm cùng lúc không giao trùng.
     ///
     /// Phân quyền theo cấu trúc DTNTB (thay level_role_dtntb):
@@ -50,11 +50,14 @@ namespace DTNTB.Infrastructure.Services
         // ============================================================
         // DANH MỤC
         // ============================================================
-        public async Task<List<int>> GetThangAsync()
+        /// <summary>Chỉ cho chọn tháng hiện tại và tháng trước (T, T-1), mới nhất trước. Ví dụ tháng 10/2026: 202610, 202609.</summary>
+        public Task<List<int>> GetThangAsync() => Task.FromResult(ThangChoPhep());
+
+        private static List<int> ThangChoPhep()
         {
-            await using var conn = new OracleConnection(_connString);
-            var rows = await conn.QueryAsync<int>("SELECT DISTINCT sl_thang FROM ghtt_bieu_8 ORDER BY sl_thang DESC");
-            return rows.ToList();
+            var nay = DateTime.Now;
+            var truoc = nay.AddMonths(-1);
+            return new List<int> { nay.Year * 100 + nay.Month, truoc.Year * 100 + truoc.Month };
         }
 
         public async Task<List<GhttPhieuDonViDto>> GetDonViAsync()
@@ -101,8 +104,9 @@ namespace DTNTB.Infrastructure.Services
                 JOIN dv ON dv.donvi_id = b2.donvi_id AND dv.phanvung_id = b2.phanvung_id
                 WHERE (b2.ngay_moi IS NULL OR TRUNC(b2.ngay_cn) = b2.ngay_moi)
                   AND b2.loaitb_id = 58
-                  AND b2.nhanvien_th_id > 0
+                  AND b2.nhanvien_id_kt > 0
                   AND b2.ngayhen_bh_tu IS NULL
+                  AND NVL(b2.ghtt_thanhcong, 0) = 0
             ),
             nv AS (
                 SELECT phanvung_id, nhanvien_id, MAX(ma_nv) AS ma_nv, MAX(ten_nv) AS ten_nv
@@ -119,6 +123,8 @@ namespace DTNTB.Infrastructure.Services
         public async Task<List<GhttThueBaoDto>> GetThueBaoAsync(int thang, string? maDv)
         {
             if (thang <= 0) throw new GhttPhieuValidationException("Chưa chọn tháng dữ liệu.");
+            if (!ThangChoPhep().Contains(thang))
+                throw new GhttPhieuValidationException("Chỉ giao phiếu cho dữ liệu tháng hiện tại hoặc tháng trước.");
 
             var p = new DynamicParameters();
             p.Add("thang", thang);
@@ -150,7 +156,7 @@ namespace DTNTB.Infrastructure.Services
                        END AS TinhTrang,
                        CASE WHEN (p.id IS NULL OR p.han_xl <= SYSDATE) AND nv.ma_nv IS NOT NULL THEN 1 ELSE 0 END AS DuocGiaoSo
                 FROM nguon n
-                LEFT JOIN nv ON nv.phanvung_id = n.phanvung_id AND nv.nhanvien_id = n.nhanvien_th_id
+                LEFT JOIN nv ON nv.phanvung_id = n.phanvung_id AND nv.nhanvien_id = n.nhanvien_id_kt
                 LEFT JOIN ph p ON p.phanvung_id = n.phanvung_id AND p.thuebao_id = n.thuebao_id AND p.rn = 1
                 WHERE {string.Join(" AND ", where)}
                 ORDER BY n.ten_doivt, nv.ten_nv, n.ma_tb", p, commandTimeout: 120);
@@ -230,7 +236,7 @@ namespace DTNTB.Infrastructure.Services
                     if (n == 1)
                     {
                         await GhiLichSuAsync(conn, tx, id, "GIAO",
-                            $"Giao cho NV thực hiện {r.MaNvTh}, hạn {HanGio}h" + (ghiChu == null ? "" : ". " + ghiChu) + " [DTNTB]",
+                            $"Giao cho NV kỹ thuật {r.MaNvTh}, hạn {HanGio}h" + (ghiChu == null ? "" : ". " + ghiChu) + " [DTNTB]",
                             nguoiGiao);
                         kq.ThanhCong++;
                     }
@@ -248,7 +254,7 @@ namespace DTNTB.Infrastructure.Services
 
             kq.BoQua = conHan + khongCoNv + ngoaiDs;
             if (conHan > 0) kq.GhiChu.Add($"{conHan} TB còn phiếu trong hạn.");
-            if (khongCoNv > 0) kq.GhiChu.Add($"{khongCoNv} TB chưa ghép được NV thực hiện sang tài khoản.");
+            if (khongCoNv > 0) kq.GhiChu.Add($"{khongCoNv} TB chưa ghép được NV kỹ thuật sang tài khoản.");
             if (ngoaiDs > 0) kq.GhiChu.Add($"{ngoaiDs} TB không còn trong danh sách (ngoài phạm vi hoặc dữ liệu vừa import lại).");
 
             _logger.LogInformation("{User} giao {N} phiếu GHTT tháng {Thang} (bỏ qua {BoQua}).", nguoiGiao, kq.ThanhCong, request.Thang, kq.BoQua);
@@ -265,7 +271,7 @@ namespace DTNTB.Infrastructure.Services
             var headers = new[]
             {
                 "STT", "Mã TB", "Tên TB", "Địa chỉ", "SĐT", "Đơn vị", "Tổ/Đội", "Ngày hết hạn", "Gói/KM", "KQ outbound",
-                "Mã NV thực hiện", "NV thực hiện", "Ngày giao", "Hạn XL", "Trạng thái",
+                "Mã NV kỹ thuật", "NV kỹ thuật", "Ngày giao", "Hạn XL", "Trạng thái",
                 "Lý do", "Ghi chú KQ", "Ngày hẹn", "Ngày cập nhật KQ", "Số lần giao"
             };
             for (var i = 0; i < headers.Length; i++) ws.Cell(1, i + 1).Value = headers[i];
@@ -307,7 +313,7 @@ namespace DTNTB.Infrastructure.Services
             return ms.ToArray();
         }
 
-        /// <summary>Lọc giống màn hình: danh sách (chưa giao / đã giao), thẻ trạng thái, tổ, NV thực hiện, từ khóa.</summary>
+        /// <summary>Lọc giống màn hình: danh sách (chưa giao / đã giao), thẻ trạng thái, tổ, NV kỹ thuật, từ khóa.</summary>
         private static IEnumerable<GhttThueBaoDto> LocThueBao(IEnumerable<GhttThueBaoDto> q, GhttThueBaoQueryDto f)
         {
             if (f.DoiVtId.HasValue) q = q.Where(r => r.DoiVtId == f.DoiVtId);
@@ -491,7 +497,7 @@ namespace DTNTB.Infrastructure.Services
 
         /// <summary>
         /// Điều kiện phạm vi theo data_scope.
-        /// maDvColumn: cột mã đơn vị (215.3...), maNvColumn: cột mã NV (NV thực hiện / NV nhận phiếu).
+        /// maDvColumn: cột mã đơn vị (215.3...), maNvColumn: cột mã NV (NV kỹ thuật / NV nhận phiếu).
         /// </summary>
         private string ScopeClause(DynamicParameters p, string maDvColumn, string maNvColumn)
         {
