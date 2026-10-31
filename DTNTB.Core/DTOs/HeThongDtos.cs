@@ -6,6 +6,8 @@ namespace DTNTB.Core.DTOs
 {
     public class RoleDto
     {
+        /// <summary>Số thứ tự hiển thị (cột role_id).</summary>
+        public int? RoleId { get; set; }
         public string RoleCode { get; set; } = string.Empty;
         public string RoleName { get; set; } = string.Empty;
         public string DataScope { get; set; } = string.Empty;
@@ -49,6 +51,9 @@ namespace DTNTB.Core.DTOs
 
     public class SaveRoleRequestDto
     {
+        /// <summary>Số thứ tự (role_id); bỏ trống khi thêm mới = lớn nhất + 1, khi sửa = giữ nguyên.</summary>
+        [Range(1, 9999)]
+        public int? RoleId { get; set; }
         [Required, StringLength(50)]
         public string RoleCode { get; set; } = string.Empty;
         [Required, StringLength(200)]

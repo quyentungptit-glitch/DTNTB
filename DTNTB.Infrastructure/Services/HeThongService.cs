@@ -27,28 +27,10 @@ namespace DTNTB.Infrastructure.Services
             using (var conn = new OracleConnection(_connString))
             {
                 string query = @"
-            SELECT r.role_code as RoleCode, r.role_name as RoleName, 
+            SELECT r.role_id as RoleId, r.role_code as RoleCode, r.role_name as RoleName,
                    r.data_scope as DataScope, r.description as Description
             FROM dtntb_sys_roles r
-            ORDER BY 
-                CASE r.data_scope
-                    WHEN 'TOAN_TINH' THEN 1
-                    WHEN 'DIA_BAN'   THEN 2
-                    WHEN 'DON_VI'    THEN 3
-                    WHEN 'TO_QL'     THEN 4
-                    WHEN 'NHAN_VIEN' THEN 5
-                    ELSE 99
-                END,
-                CASE r.role_code
-                    WHEN 'SUPER_ADMIN' THEN 1
-                    WHEN 'AREA_ADMIN'  THEN 2
-                    WHEN 'UNIT_ADMIN'  THEN 3
-                    WHEN 'TO_TRUONG'   THEN 4
-                    WHEN 'NVKT'        THEN 5
-                    WHEN 'NVKD'        THEN 6
-                    WHEN 'NVAM'        THEN 7
-                    ELSE 99
-                END";
+            ORDER BY r.role_id NULLS LAST, r.role_code";
 
                 var roles = (await conn.QueryAsync<RoleDto>(query)).ToList();
                 return roles;
@@ -59,7 +41,7 @@ namespace DTNTB.Infrastructure.Services
         {
             using (var conn = new OracleConnection(_connString))
             {
-                string queryRole = "SELECT role_code as RoleCode, role_name as RoleName, data_scope as DataScope, description as Description FROM dtntb_sys_roles WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
+                string queryRole = "SELECT role_id as RoleId, role_code as RoleCode, role_name as RoleName, data_scope as DataScope, description as Description FROM dtntb_sys_roles WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
                 var role = await conn.QueryFirstOrDefaultAsync<RoleDto>(queryRole, new { role_code = roleCode });
                 if (role == null) return null;
 
@@ -108,12 +90,18 @@ namespace DTNTB.Infrastructure.Services
             };
             var normalizedScope = request.DataScope.Trim().ToUpperInvariant();
             if (!allowedScopes.Contains(normalizedScope)) return false;
+            // Mã vai trò: chữ in hoa không dấu, số, gạch dưới (dùng trong JWT / bảng phân quyền).
+            var code = (request.RoleCode ?? "").Trim().ToUpperInvariant();
+            if (code.Length < 2 || code.Length > 50 || !code.All(c => (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'))
+                return false;
+            if (string.IsNullOrWhiteSpace(request.RoleName)) return false;
 
             using (var conn = new OracleConnection(_connString))
             {
                 const string insertQuery = @"
-                    INSERT INTO dtntb_sys_roles (role_code, role_name, data_scope, description)
-                    SELECT :role_code, :role_name, :data_scope, :description
+                    INSERT INTO dtntb_sys_roles (role_id, role_code, role_name, data_scope, description)
+                    SELECT NVL(:role_id, (SELECT NVL(MAX(role_id), 0) + 1 FROM dtntb_sys_roles)),
+                           :role_code, :role_name, :data_scope, :description
                     FROM dual
                     WHERE NOT EXISTS (
                         SELECT 1 FROM dtntb_sys_roles
@@ -122,6 +110,7 @@ namespace DTNTB.Infrastructure.Services
 
                 var rows = await conn.ExecuteAsync(insertQuery, new
                 {
+                    role_id = request.RoleId,
                     role_code = request.RoleCode.Trim().ToUpper(),
                     role_name = request.RoleName.Trim(),
                     data_scope = normalizedScope,
@@ -160,10 +149,12 @@ namespace DTNTB.Infrastructure.Services
                 UPDATE dtntb_sys_roles
                 SET role_name = :role_name,
                     data_scope = :data_scope,
-                    description = :description
+                    description = :description,
+                    role_id = NVL(:role_id, role_id)
                 WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
             var rows = await conn.ExecuteAsync(updateQuery, new
             {
+                role_id = request.RoleId,
                 role_code = request.RoleCode.Trim().ToUpperInvariant(),
                 role_name = request.RoleName.Trim(),
                 data_scope = normalizedScope,
@@ -172,16 +163,38 @@ namespace DTNTB.Infrastructure.Services
             return rows > 0;
         }
 
-        public async Task<bool> DeleteRoleAsync(string roleCode)
+        public async Task<(bool Success, string? Message)> DeleteRoleAsync(string roleCode)
         {
-            if (string.Equals(roleCode?.Trim(), "SUPER_ADMIN", StringComparison.OrdinalIgnoreCase))
-                return false;
+            var code = roleCode?.Trim() ?? "";
+            if (code.Length == 0) return (false, "Thiếu mã vai trò.");
+            if (string.Equals(code, "SUPER_ADMIN", StringComparison.OrdinalIgnoreCase))
+                return (false, "Không được xoá vai trò SUPER_ADMIN.");
 
-            using (var conn = new OracleConnection(_connString))
+            using var conn = new OracleConnection(_connString);
+            await conn.OpenAsync();
+            var soNguoi = await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(1) FROM dtntb_sys_user_roles WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))", new { role_code = code });
+            if (soNguoi > 0)
+                return (false, $"Vai trò đang được gán cho {soNguoi} người dùng. Chuyển họ sang vai trò khác trước khi xoá.");
+
+            using var trans = conn.BeginTransaction();
+            try
             {
-                string query = "DELETE FROM dtntb_sys_roles WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))";
-                var rows = await conn.ExecuteAsync(query, new { role_code = roleCode });
-                return rows > 0;
+                await conn.ExecuteAsync("DELETE FROM dtntb_sys_role_permissions WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))", new { role_code = code }, trans);
+                await conn.ExecuteAsync("DELETE FROM dtntb_sys_role_menus WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))", new { role_code = code }, trans);
+                var rows = await conn.ExecuteAsync("DELETE FROM dtntb_sys_roles WHERE UPPER(TRIM(role_code)) = UPPER(TRIM(:role_code))", new { role_code = code }, trans);
+                if (rows == 0)
+                {
+                    trans.Rollback();
+                    return (false, "Không tìm thấy vai trò.");
+                }
+                trans.Commit();
+                return (true, null);
+            }
+            catch
+            {
+                trans.Rollback();
+                throw;
             }
         }
 
@@ -269,16 +282,7 @@ namespace DTNTB.Infrastructure.Services
                                                        r.role_code as RoleCode, r.role_name as RoleName, r.data_scope as DataScope,
                                                        ur.assigned_date as AssignedDate
                                                 {baseSql}
-                                                ORDER BY 
-                                                    CASE r.data_scope
-                                                        WHEN 'TOAN_TINH' THEN 1
-                                                        WHEN 'DIA_BAN'   THEN 2
-                                                        WHEN 'DON_VI'    THEN 3
-                                                        WHEN 'TO_QL'     THEN 4
-                                                        WHEN 'NHAN_VIEN' THEN 5
-                                                        ELSE 99
-                                                    END,
-                                                    ur.assigned_date DESC
+                                                ORDER BY r.role_id NULLS LAST, r.role_code, ur.assigned_date DESC, ur.ma_nd
                                             ) a WHERE ROWNUM <= :end_row
                                         ) WHERE rnum >= :start_row";
 

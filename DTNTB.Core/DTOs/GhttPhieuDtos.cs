@@ -58,10 +58,18 @@
         public string? GhiChuKq { get; set; }
         public DateTime? NgayKq { get; set; }
         public DateTime? NgayHen { get; set; }
+        /// <summary>Số phiếu đã giao cho TB trong tháng.</summary>
         public int SoLanGiao { get; set; }
+        /// <summary>Thứ tự phiếu này trong tháng (dòng phiếu); 0 với dòng chưa giao.</summary>
+        public int LanGiao { get; set; }
+        /// <summary>TB còn trong lần import Biểu 8 mới nhất (false: đã gia hạn / có ngày hẹn / đổi NV...).</summary>
+        public bool ConTrongDs => ConTrongDsSo == 1;
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public int ConTrongDsSo { get; set; } = 1;
         /// <summary>CHUA_GIAO | DA_GIAO | QUA_HAN | KHONG_TC | THANH_CONG</summary>
         public string TinhTrang { get; set; } = GhttPhieuTinhTrang.CHUA_GIAO;
-        /// <summary>Chọn được để giao: chưa có phiếu hoặc phiếu gần nhất đã hết hạn, và ghép được NV thực hiện.</summary>
+        /// <summary>Chọn được để giao: dòng Chưa giao (không còn phiếu trong hạn) và ghép được NV kỹ thuật.</summary>
         public bool DuocGiao => DuocGiaoSo == 1;
 
         /// <summary>Cột số 0/1 đọc từ CSDL (Dapper không đổi NUMBER sang bool).</summary>

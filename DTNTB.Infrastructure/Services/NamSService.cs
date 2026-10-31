@@ -542,7 +542,7 @@ namespace DTNTB.Infrastructure.Services
         // ============================================================
 
         /// <summary>Tự tạo phiếu được ở mọi trạm trong DTNTB_CSHT (đi qua trạm đơn vị khác vẫn làm được).</summary>
-        private static string TuTaoScope(DynamicParameters p, string a) => "1 = 1";
+        private static string TuTaoScope(DynamicParameters p, string a) => TramHoatDong(a);
 
         public async Task<List<NamSTramTuTaoDto>> TimTramTuTaoAsync(string? search, double? lat, double? lng)
         {
@@ -1481,8 +1481,15 @@ namespace DTNTB.Infrastructure.Services
         // PHẠM VI DỮ LIỆU
         // ============================================================
 
-        /// <summary>Phạm vi trên bảng trạm DTNTB_CSHT.</summary>
-        private string TramScope(DynamicParameters p, string a) => ScopeClause(p, $"{a}.ma_dv", $"{a}.ma_toql", null);
+        /// <summary>Chỉ lấy trạm đang hoạt động trong dtntb_csht.</summary>
+        private static string TramHoatDong(string a) => $"TRIM({a}.trangthai) = 'Đang hoạt động'";
+
+        /// <summary>Phạm vi trên bảng trạm DTNTB_CSHT (chỉ trạm đang hoạt động).</summary>
+        private string TramScope(DynamicParameters p, string a)
+        {
+            var scope = ScopeClause(p, a + ".ma_dv", a + ".ma_toql", null);
+            return "(" + scope + ") AND " + TramHoatDong(a);
+        }
 
         /// <summary>Phạm vi trên phiếu (nhân viên: phiếu giao cho mình).</summary>
         private string PhieuScope(DynamicParameters p, string a) => ScopeClause(p, $"{a}.ma_dv", $"{a}.ma_toql", $"{a}.ma_nd_nhan");

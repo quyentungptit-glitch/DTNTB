@@ -19,8 +19,10 @@ namespace DTNTB.Infrastructure.Services
     /// Quy tắc giữ nguyên như BCBG:
     ///  - Nguồn = tháng được chọn, lần import mới nhất (ngày) của từng phân vùng; LOAITB_ID = 58, NHANVIEN_ID_KT > 0,
     ///    NGAYHEN_BH_TU IS NULL, GHTT_THANHCONG = 0 (giống BCBG); đơn vị ghép (DONVI_ID, PHANVUNG_ID) sang V_DONVI với MA_DV LIKE '215.3%'.
-    ///  - Phiếu giao cho đúng NV kỹ thuật (NHANVIEN_ID_KT), hạn 72 giờ; TB còn phiếu trong hạn không giao thêm; hết hạn chưa xử lý thì
-    ///    phiếu cũ treo, được giao phiếu mới. Khóa bảng khi giao để 2 người bấm cùng lúc không giao trùng.
+    ///  - Phiếu giao cho đúng NV kỹ thuật (NHANVIEN_ID_KT), hạn 72 giờ; TB còn phiếu trong hạn không giao thêm. Phiếu hết hạn được
+    ///    giao lại bằng PHIẾU MỚI (mã mới); phiếu cũ giữ nguyên trạng thái (quá hạn / kết quả) để báo cáo, hiện riêng 1 dòng.
+    ///  - Tab "Đã giao" lấy theo bảng phiếu của tháng, kể cả TB đã ra khỏi Biểu 8 ở lần import sau. Khóa bảng khi giao.
+    ///  - Phiếu quá hạn 72 giờ mà chưa có kết quả thì KHÓA cập nhật kết quả với mọi người (kể cả nhập hộ).
     ///
     /// Phân quyền theo cấu trúc DTNTB (thay level_role_dtntb):
     ///  - PHIEU_GIAO: giao phiếu; PHIEU_XU_LY: cập nhật kết quả (kể cả nhập hộ); EXPORT: xuất Excel.
@@ -114,10 +116,14 @@ namespace DTNTB.Infrastructure.Services
             ),
             ph AS (
                 SELECT p.*,
-                       ROW_NUMBER() OVER (PARTITION BY p.phanvung_id, p.thuebao_id ORDER BY p.ngay_giao DESC, p.id DESC) AS rn,
+                       ROW_NUMBER() OVER (PARTITION BY p.phanvung_id, p.thuebao_id ORDER BY p.ngay_giao, p.id) AS lan_giao,
                        COUNT(*) OVER (PARTITION BY p.phanvung_id, p.thuebao_id) AS so_lan_giao
                 FROM ghtt_phieu p
-                WHERE p.trang_thai <> 'THU_HOI'
+                WHERE p.trang_thai <> 'THU_HOI' AND p.sl_thang = :thang
+            ),
+            con_han AS (
+                SELECT DISTINCT phanvung_id, thuebao_id FROM ghtt_phieu
+                WHERE trang_thai <> 'THU_HOI' AND han_xl > SYSDATE
             )";
 
         public async Task<List<GhttThueBaoDto>> GetThueBaoAsync(int thang, string? maDv)
@@ -128,38 +134,59 @@ namespace DTNTB.Infrastructure.Services
 
             var p = new DynamicParameters();
             p.Add("thang", thang);
-            var where = new List<string>
-            {
-                "n.rn = 1",
-                ScopeClause(p, "n.ma_dv_ql", "nv.ma_nv")
-            };
-            AddDonViFilter(where, p, "n.ma_dv_ql", maDv);
+            // Phạm vi áp trên cột chung: dòng phiếu theo đơn vị / NV nhận của phiếu, dòng chưa giao theo đơn vị / NV kỹ thuật của TB.
+            var where = new List<string> { ScopeClause(p, "x.MaDvPv", "x.MaNvPv") };
+            AddDonViFilter(where, p, "x.MaDvPv", maDv);
 
             await using var conn = new OracleConnection(_connString);
             var rows = await conn.QueryAsync<GhttThueBaoDto>($@"
-                WITH {CteNguon}
-                SELECT n.phanvung_id || '|' || n.thuebao_id AS Khoa,
-                       n.phanvung_id AS PhanVungId, n.thuebao_id AS ThueBaoId, n.sl_thang AS SlThang,
-                       n.ma_tb AS MaTb, n.ten_tb AS TenTb, n.diachi_ld AS DiaChi, NVL(n.so_dt, n.sdt_lh) AS SoDt,
-                       n.ten_dv AS TenDv, n.ma_dv_ql AS MaDvQl, n.doivt_id AS DoiVtId, n.ten_doivt AS TenDoiVt,
-                       n.ngay_ktdc AS NgayKtdc, n.ten_km AS TenKm, n.ketqua_ob_saucung_ipcc AS KqOb, n.ngay_cn AS NgayCn,
-                       nv.ma_nv AS MaNvTh, nv.ten_nv AS TenNvTh,
-                       p.id AS PhieuId, p.ma_nv_nhan AS MaNvNhan, p.ten_nv_nhan AS TenNvNhan, p.ngay_giao AS NgayGiao,
-                       p.han_xl AS HanXl, p.ly_do AS LyDo, p.ghichu_kq AS GhiChuKq, p.ngay_kq AS NgayKq, p.ngay_hen AS NgayHen,
-                       NVL(p.so_lan_giao, 0) AS SoLanGiao,
-                       CASE
-                           WHEN p.id IS NULL THEN 'CHUA_GIAO'
-                           WHEN p.trang_thai = 'THANH_CONG' THEN 'THANH_CONG'
-                           WHEN p.trang_thai = 'KHONG_TC' THEN 'KHONG_TC'
-                           WHEN p.han_xl > SYSDATE THEN 'DA_GIAO'
-                           ELSE 'QUA_HAN'
-                       END AS TinhTrang,
-                       CASE WHEN (p.id IS NULL OR p.han_xl <= SYSDATE) AND nv.ma_nv IS NOT NULL THEN 1 ELSE 0 END AS DuocGiaoSo
-                FROM nguon n
-                LEFT JOIN nv ON nv.phanvung_id = n.phanvung_id AND nv.nhanvien_id = n.nhanvien_id_kt
-                LEFT JOIN ph p ON p.phanvung_id = n.phanvung_id AND p.thuebao_id = n.thuebao_id AND p.rn = 1
+                WITH {CteNguon},
+                x AS (
+                    -- 1) Tab Đã giao: MỖI PHIẾU của tháng 1 dòng, chỉ để theo dõi (kể cả TB đã ra khỏi Biểu 8)
+                    SELECT p.phanvung_id || '|' || p.thuebao_id AS Khoa,
+                           p.phanvung_id AS PhanVungId, p.thuebao_id AS ThueBaoId, p.sl_thang AS SlThang,
+                           p.ma_tb AS MaTb, p.ten_tb AS TenTb, p.diachi AS DiaChi, p.so_dt AS SoDt,
+                           p.ten_dv AS TenDv, p.ma_dv AS MaDvQl, p.doivt_id AS DoiVtId, p.ten_doivt AS TenDoiVt,
+                           p.ngay_ktdc AS NgayKtdc, p.ten_km AS TenKm, n.ketqua_ob_saucung_ipcc AS KqOb, n.ngay_cn AS NgayCn,
+                           NVL(nv.ma_nv, p.ma_nv_nhan) AS MaNvTh, NVL(nv.ten_nv, p.ten_nv_nhan) AS TenNvTh,
+                           p.id AS PhieuId, p.ma_nv_nhan AS MaNvNhan, p.ten_nv_nhan AS TenNvNhan, p.ngay_giao AS NgayGiao,
+                           p.han_xl AS HanXl, p.ly_do AS LyDo, p.ghichu_kq AS GhiChuKq, p.ngay_kq AS NgayKq, p.ngay_hen AS NgayHen,
+                           p.so_lan_giao AS SoLanGiao, p.lan_giao AS LanGiao,
+                           CASE
+                               WHEN p.trang_thai = 'THANH_CONG' THEN 'THANH_CONG'
+                               WHEN p.trang_thai = 'KHONG_TC' THEN 'KHONG_TC'
+                               WHEN p.han_xl > SYSDATE THEN 'DA_GIAO'
+                               ELSE 'QUA_HAN'
+                           END AS TinhTrang,
+                           0 AS DuocGiaoSo,
+                           CASE WHEN n.thuebao_id IS NULL THEN 0 ELSE 1 END AS ConTrongDsSo,
+                           p.ma_dv AS MaDvPv, p.ma_nv_nhan AS MaNvPv
+                    FROM ph p
+                    LEFT JOIN nguon n ON n.rn = 1 AND n.phanvung_id = p.phanvung_id AND n.thuebao_id = p.thuebao_id
+                    LEFT JOIN nv ON nv.phanvung_id = n.phanvung_id AND nv.nhanvien_id = n.nhanvien_id_kt
+                    UNION ALL
+                    -- 2) Tab Chưa giao: TB trong Biểu 8 KHÔNG còn phiếu trong hạn (chưa giao / phiếu trước đã hết hạn -> giao phiếu mới)
+                    SELECT n.phanvung_id || '|' || n.thuebao_id,
+                           n.phanvung_id, n.thuebao_id, n.sl_thang,
+                           n.ma_tb, n.ten_tb, n.diachi_ld, NVL(n.so_dt, n.sdt_lh),
+                           n.ten_dv, n.ma_dv_ql, n.doivt_id, n.ten_doivt,
+                           n.ngay_ktdc, n.ten_km, n.ketqua_ob_saucung_ipcc, n.ngay_cn,
+                           nv.ma_nv, nv.ten_nv,   -- NV nhận phiếu = NV kỹ thuật (NHANVIEN_ID_KT)
+                           NULL, NULL, NULL, NULL,
+                           NULL, NULL, NULL, NULL, NULL,
+                           (SELECT COUNT(*) FROM ph c WHERE c.phanvung_id = n.phanvung_id AND c.thuebao_id = n.thuebao_id), 0,
+                           'CHUA_GIAO',
+                           CASE WHEN nv.ma_nv IS NOT NULL THEN 1 ELSE 0 END,
+                           1,
+                           n.ma_dv_ql, nv.ma_nv
+                    FROM nguon n
+                    LEFT JOIN nv ON nv.phanvung_id = n.phanvung_id AND nv.nhanvien_id = n.nhanvien_id_kt
+                    WHERE n.rn = 1
+                      AND NOT EXISTS (SELECT 1 FROM con_han h WHERE h.phanvung_id = n.phanvung_id AND h.thuebao_id = n.thuebao_id)
+                )
+                SELECT * FROM x
                 WHERE {string.Join(" AND ", where)}
-                ORDER BY n.ten_doivt, nv.ten_nv, n.ma_tb", p, commandTimeout: 120);
+                ORDER BY x.TenDoiVt, x.TenNvTh, x.MaTb, x.NgayGiao", p, commandTimeout: 120);
             return rows.ToList();
         }
 
@@ -178,7 +205,11 @@ namespace DTNTB.Infrastructure.Services
             var ghiChu = CleanText(request.GhiChu, 1000);
 
             // Nguồn hợp lệ trong phạm vi tại thời điểm giao (không tin dữ liệu gửi lên).
-            var nguon = (await GetThueBaoAsync(request.Thang, request.MaDv)).ToDictionary(x => x.Khoa);
+            // Chỉ TB ở tab Chưa giao mới được giao; dòng phiếu (tab Đã giao) có thể trùng khóa TB nên bỏ ra trước.
+            var nguon = (await GetThueBaoAsync(request.Thang, request.MaDv))
+                .Where(x => x.TinhTrang == GhttPhieuTinhTrang.CHUA_GIAO)
+                .GroupBy(x => x.Khoa)
+                .ToDictionary(g => g.Key, g => g.First());
 
             var kq = new GhttGiaoPhieuResultDto();
             int khongCoNv = 0, conHan = 0, ngoaiDs = 0;
@@ -193,7 +224,7 @@ namespace DTNTB.Infrastructure.Services
 
                 foreach (var khoa in chon)
                 {
-                    if (!nguon.TryGetValue(khoa, out var r)) { ngoaiDs++; continue; }
+                    if (!nguon.TryGetValue(khoa, out var r) || !r.ConTrongDs) { ngoaiDs++; continue; }
                     if (string.IsNullOrWhiteSpace(r.MaNvTh)) { khongCoNv++; continue; }
 
                     var id = await conn.ExecuteScalarAsync<long>("SELECT ghtt_phieu_seq.NEXTVAL FROM dual", transaction: tx);
@@ -236,7 +267,9 @@ namespace DTNTB.Infrastructure.Services
                     if (n == 1)
                     {
                         await GhiLichSuAsync(conn, tx, id, "GIAO",
-                            $"Giao cho NV kỹ thuật {r.MaNvTh}, hạn {HanGio}h" + (ghiChu == null ? "" : ". " + ghiChu) + " [DTNTB]",
+                            $"Giao cho NV kỹ thuật {r.MaNvTh}, hạn {HanGio}h"
+                            + (r.SoLanGiao > 0 ? $" (giao lại lần {r.SoLanGiao + 1} trong tháng)" : "")
+                            + (ghiChu == null ? "" : ". " + ghiChu) + " [DTNTB]",
                             nguoiGiao);
                         kq.ThanhCong++;
                     }
@@ -272,7 +305,7 @@ namespace DTNTB.Infrastructure.Services
             {
                 "STT", "Mã TB", "Tên TB", "Địa chỉ", "SĐT", "Đơn vị", "Tổ/Đội", "Ngày hết hạn", "Gói/KM", "KQ outbound",
                 "Mã NV kỹ thuật", "NV kỹ thuật", "Ngày giao", "Hạn XL", "Trạng thái",
-                "Lý do", "Ghi chú KQ", "Ngày hẹn", "Ngày cập nhật KQ", "Số lần giao"
+                "Lý do", "Ghi chú KQ", "Ngày hẹn", "Ngày cập nhật KQ", "Mã phiếu", "Lần giao"
             };
             for (var i = 0; i < headers.Length; i++) ws.Cell(1, i + 1).Value = headers[i];
             var head = ws.Range(1, 1, 1, headers.Length);
@@ -302,7 +335,8 @@ namespace DTNTB.Infrastructure.Services
                 ws.Cell(row, 17).Value = Text(r.GhiChuKq);
                 SetDate(ws.Cell(row, 18), r.NgayHen, "dd/MM/yyyy");
                 SetDate(ws.Cell(row, 19), r.NgayKq, "HH:mm dd/MM/yyyy");
-                ws.Cell(row, 20).Value = (double)r.SoLanGiao;
+                if (r.PhieuId.HasValue) ws.Cell(row, 20).Value = (double)r.PhieuId.Value;
+                ws.Cell(row, 21).Value = r.PhieuId.HasValue && r.SoLanGiao > 0 ? $"{r.LanGiao}/{r.SoLanGiao}" : "";
                 row++;
             }
             ws.Columns().AdjustToContents(1, Math.Min(row, 300), 8, 60);
@@ -344,11 +378,8 @@ namespace DTNTB.Infrastructure.Services
         // PHIẾU (NHÂN VIÊN / NHẬP HỘ)
         // ============================================================
 
-        /// <summary>Phiếu đang mở và chưa bị phiếu mới hơn của cùng TB thay thế (giống BCBG).</summary>
-        private const string DkMo = @"p.trang_thai = 'DA_GIAO'
-                AND NOT EXISTS (SELECT 1 FROM ghtt_phieu m
-                                WHERE m.phanvung_id = p.phanvung_id AND m.thuebao_id = p.thuebao_id
-                                  AND m.trang_thai <> 'THU_HOI' AND m.ngay_giao > p.ngay_giao)";
+        /// <summary>Phiếu đang mở (chưa có kết quả), gồm cả quá hạn. Mỗi phiếu cố định nên hiện đủ, kể cả TB có nhiều phiếu (giống BCBG).</summary>
+        private const string DkMo = "p.trang_thai = 'DA_GIAO'";
 
         private const string DkXong = "p.trang_thai IN ('THANH_CONG', 'KHONG_TC') AND p.ngay_kq >= TRUNC(SYSDATE) - 60";
 
@@ -439,13 +470,17 @@ namespace DTNTB.Infrastructure.Services
                 var p = new DynamicParameters();
                 p.Add("id", phieuId);
                 var scope = ScopeClause(p, "p.ma_dv", "p.ma_nv_nhan");
-                var maNvNhan = await conn.ExecuteScalarAsync<string?>(
-                    $"SELECT p.ma_nv_nhan FROM ghtt_phieu p WHERE p.id = :id AND {scope} FOR UPDATE", p, tx);
-                if (maNvNhan == null)
+                var cur = await conn.QueryFirstOrDefaultAsync<PhieuKhoa>($@"
+                    SELECT p.ma_nv_nhan AS MaNvNhan, CASE WHEN p.trang_thai = 'DA_GIAO' AND p.han_xl <= SYSDATE THEN 1 ELSE 0 END AS QuaHan
+                    FROM ghtt_phieu p WHERE p.id = :id AND {scope} FOR UPDATE", p, tx);
+                if (cur?.MaNvNhan == null)
                 {
                     await tx.RollbackAsync();
                     return false;
                 }
+                if (cur.QuaHan == 1)
+                    throw new GhttPhieuValidationException($"Phiếu đã quá hạn xử lý {HanGio} giờ, không được cập nhật kết quả.");
+                var maNvNhan = cur.MaNvNhan;
 
                 var u = new DynamicParameters();
                 u.Add("tt", trangThai);
@@ -454,13 +489,13 @@ namespace DTNTB.Infrastructure.Services
                 u.Add("ngay_hen", ngayHen, DbType.Date);
                 u.Add("nguoi", nguoiNhap);
                 u.Add("id", phieuId);
-                // Phiếu đang mở (kể cả quá hạn) -> TC / KTC; phiếu KTC -> được đổi sang TC (giống BCBG).
+                // Phiếu còn hạn -> TC / KTC; phiếu KTC -> được đổi sang TC; phiếu quá hạn chưa có KQ bị khóa (giống BCBG).
                 var n = await conn.ExecuteAsync(@"
                     UPDATE ghtt_phieu
                     SET trang_thai = :tt, ly_do = :ly_do, ghichu_kq = :ghichu, ngay_hen = :ngay_hen,
                         ngay_kq = SYSDATE, nguoi_kq = :nguoi
                     WHERE id = :id
-                      AND (trang_thai = 'DA_GIAO' OR (trang_thai = 'KHONG_TC' AND :tt = 'THANH_CONG'))", u, tx);
+                      AND ((trang_thai = 'DA_GIAO' AND han_xl > SYSDATE) OR (trang_thai = 'KHONG_TC' AND :tt = 'THANH_CONG'))", u, tx);
 
                 if (n == 1)
                 {
@@ -479,6 +514,12 @@ namespace DTNTB.Infrastructure.Services
                 await tx.RollbackAsync();
                 throw;
             }
+        }
+
+        private sealed class PhieuKhoa
+        {
+            public string? MaNvNhan { get; set; }
+            public int QuaHan { get; set; }
         }
 
         // ============================================================

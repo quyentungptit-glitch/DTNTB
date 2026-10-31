@@ -76,7 +76,7 @@ namespace DTNTB.API.Controllers
         {
             if (RequireProvinceSystemScope() is IActionResult denied) return denied;
             var success = await _heThongService.SaveRoleAsync(model);
-            if (!success) return BadRequest(new { message = "Lưu vai trò thất bại." });
+            if (!success) return BadRequest(new { message = "Lưu vai trò thất bại: mã vai trò đã tồn tại hoặc không hợp lệ (chỉ gồm chữ in hoa không dấu, số, dấu _)." });
             return Ok(new { success = true, message = "Lưu vai trò thành công." });
         }
 
@@ -100,8 +100,8 @@ namespace DTNTB.API.Controllers
         public async Task<IActionResult> DeleteRole(string roleCode)
         {
             if (RequireProvinceSystemScope() is IActionResult denied) return denied;
-            var success = await _heThongService.DeleteRoleAsync(roleCode);
-            if (!success) return BadRequest(new { message = "Xóa vai trò thất bại." });
+            var (success, msg) = await _heThongService.DeleteRoleAsync(roleCode);
+            if (!success) return BadRequest(new { message = msg ?? "Xóa vai trò thất bại." });
             return Ok(new { success = true, message = "Xóa vai trò thành công." });
         }
 

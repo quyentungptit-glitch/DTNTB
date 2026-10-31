@@ -89,6 +89,21 @@
             public const string VIEW      = "PERMISSIONS.NAMS.VIEW";       // Xem báo cáo tổng hợp / chi tiết
             public const string EXPORT    = "PERMISSIONS.NAMS.EXPORT";     // Xuất Excel báo cáo
         }
+
+        // ==========================================
+        // MODULE: QUẢN LÝ CÔNG VIỆC TTHT (PHIẾU YÊU CẦU CÔNG VIỆC)
+        // Tổ trưởng / người nhận KTHT không cần quyền: có tên trong dtntb_cv_nguoi_nhan là nhận phiếu.
+        // ==========================================
+        public static class CV
+        {
+            public const string TAO            = "PERMISSIONS.CV.TAO";            // Tạo phiếu cho tổ Hạ tầng của địa bàn mình
+            public const string TAO_TOAN_TINH  = "PERMISSIONS.CV.TAO_TOAN_TINH";  // Tạo phiếu toàn tỉnh + phiếu khai báo KTHT
+            public const string XU_LY          = "PERMISSIONS.CV.XU_LY";          // Xử lý phiếu được giao
+            public const string DUYET          = "PERMISSIONS.CV.DUYET";          // Duyệt tính lương phiếu đã đóng
+            public const string VIEW           = "PERMISSIONS.CV.VIEW";           // Xem báo cáo
+            public const string EXPORT         = "PERMISSIONS.CV.EXPORT";         // Xuất Excel
+            public const string QUAN_TRI       = "PERMISSIONS.CV.QUAN_TRI";       // Danh mục, người nhận, chuyển tổ mọi phiếu
+        }
     }
 
     // ==========================================

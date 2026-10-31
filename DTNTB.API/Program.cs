@@ -101,6 +101,7 @@ builder.Services.AddScoped<IDtntbService, DtntbService>();
 builder.Services.AddScoped<IGhttService, GhttService>();
 builder.Services.AddScoped<IGhttPhieuService, GhttPhieuService>(); // Giao phiếu tiếp cận TB GHTT (dùng chung bảng với BCBG)
 builder.Services.AddScoped<INamSService, NamSService>();         // 5S nhà trạm
+builder.Services.AddScoped<ICvService, CvService>();             // Quản lý công việc TTHT (phiếu yêu cầu công việc)
 builder.Services.AddScoped<IHeThongService, HeThongService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddSingleton<INotificationAdminService, NotificationAdminService>();
@@ -116,6 +117,7 @@ builder.Services.AddHttpClient<IReverseGeocodingService, ReverseGeocodingService
 builder.Services.AddScoped<IDiemDanhService, DiemDanhService>();
 builder.Services.AddSingleton<IDiemDanhImageStore, MinioDiemDanhImageStore>(); // Ảnh điểm danh lưu ở MinIO, bucket riêng
 builder.Services.AddSingleton<INamSImageStore, MinioNamSImageStore>(); // Ảnh 5S nhà trạm: MinIO bucket riêng ttht-5s (Minio:Bucket5S)
+builder.Services.AddSingleton<ICvFileStore, MinioCvFileStore>(); // File phiếu công việc: MinIO bucket riêng ttht-congviec (Minio:BucketCv)
 if (builder.Configuration.GetValue<bool>("BackgroundWorkers:FcmNotificationEnabled"))
 {
     builder.Services.AddHostedService<DTNTB.API.BackgroundWorkers.FcmNotificationWorker>();

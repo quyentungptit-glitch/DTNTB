@@ -11,7 +11,8 @@ namespace DTNTB.Core.Interfaces
         Task<List<PermissionDto>> GetAllPermissionsAsync();
         Task<bool> SaveRoleAsync(SaveRoleRequestDto request);
         Task<bool> UpdateRoleAsync(SaveRoleRequestDto request);
-        Task<bool> DeleteRoleAsync(string roleCode);
+        /// <summary>Xoá vai trò (kèm quyền, menu). Không xoá được khi còn người dùng được gán; trả lỗi tiếng Việt.</summary>
+        Task<(bool Success, string? Message)> DeleteRoleAsync(string roleCode);
         Task<bool> UpdateRolePermissionsAsync(UpdateRolePermissionsRequestDto request);
         Task<PaginatedResultDto<UserRoleDto>> GetUserRolesAsync(string? search, string? roleCode, int page, int pageSize);
         Task<bool> AssignUserRoleAsync(AssignUserRoleRequestDto request);
